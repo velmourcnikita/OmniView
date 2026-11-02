@@ -22,3 +22,10 @@ __pycache__/
 **/*.rs.bk
 **/mutants.out*/
 rustc-ice-*.txt
+/presentation/
+/docs/competition.md
+/scripts/capture-presentation.cjs
+/scripts/record-demo.cjs
+/scripts/encode-demo.ps1
+/scripts/package-complete.py
+/НАЧАТЬ ЗДЕСЬ.txt

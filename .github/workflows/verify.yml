@@ -86,14 +86,9 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          pattern: OmniView-x*
-          merge-multiple: true
-          path: packages
       - name: Draft release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.ref_name }}
-        run: gh release create "$RELEASE_TAG" packages/*.zip --verify-tag --draft --generate-notes
+        run: gh release create "$RELEASE_TAG" --verify-tag --draft --generate-notes

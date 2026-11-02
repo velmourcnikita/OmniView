@@ -2,7 +2,7 @@
 
 **OmniView — подразделение OmniCONTROL.** Программа для компьютерного класса: экраны, сообщения, задания и результаты урока в локальной сети.
 
-[Загрузки](https://github.com/velmourcnikita/OmniView/releases) · [Проверки сборок](https://github.com/velmourcnikita/OmniView/actions) · [Сценарий защиты](docs/competition.md)
+[Исходники релизов](https://github.com/velmourcnikita/OmniView/releases) · [Проверки сборок](https://github.com/velmourcnikita/OmniView/actions)
 
 [![Сборка и тесты](https://github.com/velmourcnikita/OmniView/actions/workflows/verify.yml/badge.svg?branch=main)](https://github.com/velmourcnikita/OmniView/actions/workflows/verify.yml)
 
@@ -27,8 +27,6 @@
 - Сборки Windows x86 и x64.
 
 В 0.5.1 обновлён чёрно-белый интерфейс со скруглёнными карточками и окнами. Нижняя подпись в боковой панели убрана, сведения OmniCONTROL остаются в свойствах EXE и на сайте.
-
-[Презентация, анимация и текст выступления](presentation/README.md).
 
 ## Запуск
 
@@ -100,7 +98,7 @@ cargo test --locked --target i686-pc-windows-gnullvm
 
 `manifest.json` содержит SHA-256, размер, архитектуру и версию файлов. Проверка: `scripts/verify-release.ps1`. Манифест надо получать из доверенного комплекта: один только хеш не удостоверяет издателя.
 
-Workflow создаёт Windows-архивы и статический сайт. При отправке тега `v*` он формирует attestation и черновик GitHub Release. До успешного запуска нельзя считать сборку подтверждённой GitHub.
+Workflow проверяет Windows-сборки и статический сайт. При отправке тега `v*` он формирует attestation для результатов сборки и черновик релиза исходников. Готовые архивы к релизу не прикладываются.
 
 ```powershell
 gh attestation verify OmniView-0.5.1-win64.zip --repo velmourcnikita/OmniView
@@ -125,4 +123,4 @@ npm run build
 
 Передача звука, блокировка и выключение чужого компьютера отсутствуют. Код не следует описывать как полную замену Veyon.
 
-Шрифт поставляется по SIL Open Font License; текст лицензии — `assets/fonts/OFL.txt`. Старые варианты и презентация 0.3 сохранены в полном комплекте отдельно от текущих исходников.
+Шрифт поставляется по SIL Open Font License; текст лицензии — `assets/fonts/OFL.txt`.
