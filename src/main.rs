@@ -3,6 +3,8 @@ mod app;
 mod assessment;
 mod capture;
 mod classroom;
+mod control;
+mod control_test;
 mod invitation;
 mod lesson;
 mod notifications;
@@ -23,6 +25,16 @@ enum UiEvent {
 }
 fn main() {
     let _ = rustls::crypto::ring::default_provider().install_default();
+    if std::env::args().any(|a| a == "--control-test") {
+        if let Err(e) = control_test::run() {
+            let _ = std::fs::create_dir_all(app::data_dir());
+            let _ = std::fs::write(
+                app::data_dir().join("control-smoke.json"),
+                serde_json::json!({"ok":false,"error":e}).to_string(),
+            );
+        }
+        return;
+    }
     if std::env::args().any(|a| a == "--notification-test") {
         if let Err(e) = notifications::smoke_test() {
             let _ = std::fs::create_dir_all(app::data_dir());
@@ -88,6 +100,7 @@ fn run() -> Result<(), String> {
    let (mime,content):(&str,&'static[u8])=match request.uri().path(){
     "/"|"/index.html"=>("text/html; charset=utf-8",include_bytes!("../web/index.html")),
     "/app.js"=>("text/javascript; charset=utf-8",include_bytes!("../web/app.js")),
+    "/control.js"=>("text/javascript; charset=utf-8",include_bytes!("../web/control.js")),
     "/lesson.js"=>("text/javascript; charset=utf-8",include_bytes!("../web/lesson.js")),
     "/styles.css"=>("text/css; charset=utf-8",include_bytes!("../web/styles.css")),
     "/AppRegular.ttf"=>("font/ttf",include_bytes!("../assets/fonts/AppRegular.ttf")),
@@ -119,10 +132,10 @@ fn run() -> Result<(), String> {
    Event::UserEvent(UiEvent::Ipc(raw))=>if let Ok(value)=serde_json::from_str::<serde_json::Value>(&raw){
     if smoke && value["action"]=="ui_smoke"{
      let _=std::fs::write(app::data_dir().join("ui-smoke.json"),value.to_string());core.stop();*flow=ControlFlow::Exit;
-    }else if value["action"]=="ready"{ready=true;last=0;}else{let core=core.clone();std::thread::spawn(move||{if let Err(e)=core.handle(value){core.feedback(&e);}});}
+    }else if value["action"]=="ready"{ready=true;last=0;}else if value["action"]=="control_input"{if let Err(e)=core.handle(value){core.feedback(&e);}}else{let core=core.clone();std::thread::spawn(move||{if let Err(e)=core.handle(value){core.feedback(&e);}});}
    },
-   Event::WindowEvent{window_id,event:WindowEvent::CloseRequested,..}=>{if window_id==notifications.window.id(){notifications.dismiss();}else{core.stop();*flow=ControlFlow::Exit;}},
-   Event::WindowEvent{window_id,event:WindowEvent::MouseInput{state:tao::event::ElementState::Pressed,..},..} if window_id==notifications.window.id()=>notifications.dismiss(),
+   Event::WindowEvent{window_id,event:WindowEvent::CloseRequested,..}=>{if window_id==notifications.window.id(){if notifications.assisting{let _=core.handle(serde_json::json!({"action":"control_consent","on":false}));}notifications.dismiss();}else{core.stop();*flow=ControlFlow::Exit;}},
+   Event::WindowEvent{window_id,event:WindowEvent::MouseInput{state:tao::event::ElementState::Pressed,..},..} if window_id==notifications.window.id()=>{if notifications.assisting{let _=core.handle(serde_json::json!({"action":"control_consent","on":false}));}notifications.dismiss();},
    Event::RedrawRequested(id) if id==notifications.window.id()=>notifications.paint(),
    Event::WindowEvent{event:WindowEvent::Focused(active),..}=>{let _=webview.set_memory_usage_level(if active{MemoryUsageLevel::Normal}else{MemoryUsageLevel::Low});},
    _=>{}

@@ -25,6 +25,7 @@ pub struct Preferences {
     pub low: bool,
     pub theme: String,
     pub animations: bool,
+    pub notification_seconds: u64,
 }
 impl Default for Preferences {
     fn default() -> Self {
@@ -35,6 +36,7 @@ impl Default for Preferences {
             low: true,
             theme: "dark".into(),
             animations: true,
+            notification_seconds: 9,
         }
     }
 }
@@ -61,10 +63,11 @@ pub struct Core {
 }
 impl Core {
     pub fn new(student: bool) -> Self {
-        let prefs = std::fs::read(data_dir().join("settings.json"))
+        let mut prefs = std::fs::read(data_dir().join("settings.json"))
             .ok()
             .and_then(|b| serde_json::from_slice::<Preferences>(&b).ok())
             .unwrap_or_default();
+        prefs.notification_seconds = prefs.notification_seconds.clamp(5, 60);
         Self {
             prefs: Mutex::new(prefs),
             student_role: AtomicBool::new(student),
@@ -100,10 +103,10 @@ impl Core {
         let student = self.student.lock().unwrap();
         let notice = self.notice.lock().unwrap();
         let t=teacher.as_ref().map(|t|{
-   let peers=t.list().into_iter().map(|p|json!({"id":p.id,"name":p.name,"machine":p.machine,"online":p.online,"help":p.help,"sharing":p.sharing,"monitoring":p.monitoring,"monitor_error":p.monitor_error,"last_seen":p.last_seen,"frame":p.frame.map(|f|json!({"seq":f.seq}))})).collect::<Vec<_>>();
+   let peers=t.list().into_iter().map(|p|json!({"id":p.id,"name":p.name,"machine":p.machine,"online":p.online,"help":p.help,"sharing":p.sharing,"monitoring":p.monitoring,"monitor_error":p.monitor_error,"control":p.control,"last_seen":p.last_seen,"frame":p.frame.map(|f|json!({"seq":f.seq}))})).collect::<Vec<_>>();
    json!({"active":!t.stop.load(Ordering::Relaxed),"invite":*self.protected_invite.lock().unwrap(),"address":format!("{}:{}",t.invite.host,t.invite.port),"peers":peers,"log":*t.log.lock().unwrap(),"broadcasting":t.broadcasting.load(Ordering::Relaxed),"lesson":*t.lesson.lock().unwrap(),"assessment":*t.assessment.lock().unwrap()})
   });
-        let s=student.as_ref().map(|s|{let st=s.state.lock().unwrap();json!({"connected":st.connected,"connecting":st.connecting,"status":st.status,"sharing":st.sharing,"help":st.help,"messages":st.messages,"broadcasting":st.broadcasting,"broadcast":st.broadcast.as_ref().map(|f|json!({"seq":f.seq})),"question":st.question,"answer_pending":st.answer.is_some(),"policy":st.policy,"monitoring":st.monitoring,"detections":st.detections,"monitor_error":st.monitor_error})});
+        let s=student.as_ref().map(|s|{let st=s.state.lock().unwrap();json!({"connected":st.connected,"connecting":st.connecting,"status":st.status,"sharing":st.sharing,"help":st.help,"messages":st.messages,"broadcasting":st.broadcasting,"broadcast":st.broadcast.as_ref().map(|f|json!({"seq":f.seq})),"question":st.question,"answer_pending":st.answer.is_some(),"policy":st.policy,"monitoring":st.monitoring,"detections":st.detections,"monitor_error":st.monitor_error,"control_request":st.control_request,"control_active":st.control_active,"control_pending":st.control_grant.is_some(),"control_error":st.control_error})});
         json!({"version":env!("CARGO_PKG_VERSION"),"arch":std::env::consts::ARCH,"role":if self.student_role.load(Ordering::Relaxed){"student"}else{"teacher"},"prefs":*self.prefs.lock().unwrap(),"teacher":t,"student":s,"notice":{"id":notice.0,"text":notice.1},"export_file":*self.export_file.lock().unwrap()})
     }
     pub fn image(&self, url: &str) -> Option<Vec<u8>> {
@@ -143,6 +146,63 @@ impl Core {
                 .ok_or_else(|| format!("Отсутствует поле {key}"))
         };
         match action {
+            "control_request" => {
+                let on = value["on"].as_bool().ok_or("Укажи состояние управления")?;
+                self.teacher
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .ok_or("Открой класс")?
+                    .request_control(&text("id")?, on)?;
+                self.feedback(if on {
+                    "Запрос управления отправлен. Дождись согласия ученика"
+                } else {
+                    "Управление остановлено"
+                });
+            }
+            "control_input" => {
+                let events: Vec<crate::control::InputEvent> =
+                    serde_json::from_value(value["events"].clone()).map_err(|_| "Неверный ввод")?;
+                self.teacher
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .ok_or("Открой класс")?
+                    .control_input(&text("id")?, &text("request")?, events)?;
+            }
+            "control_consent" => {
+                let on = value["on"].as_bool().ok_or("Укажи согласие")?;
+                let student = self.student.lock().unwrap();
+                let s = student.as_ref().ok_or("Подключись к классу")?;
+                let mut st = s.state.lock().unwrap();
+                if on {
+                    if !st.connected || !st.sharing {
+                        return Err("Сначала включи показ экрана".into());
+                    }
+                    let id = st
+                        .control_request
+                        .as_ref()
+                        .ok_or("Нет запроса управления")?
+                        .id
+                        .clone();
+                    if value["request"].as_str() != Some(&id) {
+                        return Err("Запрос изменился. Подтверди новый запрос".into());
+                    }
+                    s.input.authorize(id.clone());
+                    st.control_grant = Some(id);
+                    st.control_error = None;
+                } else {
+                    s.input.revoke();
+                    st.control_grant = None;
+                    st.control_active = false;
+                }
+                drop(st);
+                self.feedback(if on {
+                    "Разрешение отправлено. Esc останавливает управление"
+                } else {
+                    "Управление остановлено"
+                });
+            }
             "save_settings" => {
                 let mut prefs: Preferences = serde_json::from_value(value["prefs"].clone())
                     .map_err(|_| "Неверные настройки")?;
@@ -157,6 +217,7 @@ impl Core {
                 if prefs.theme != "dark" && prefs.theme != "light" {
                     return Err("Неизвестная тема".into());
                 }
+                prefs.notification_seconds = prefs.notification_seconds.clamp(5, 60);
                 save_preferences(&prefs)?;
                 if let Some(t) = self.teacher.lock().unwrap().as_ref() {
                     t.low.store(prefs.low, Ordering::Relaxed);
@@ -483,14 +544,17 @@ mod tests {
         let old: Preferences =
             serde_json::from_value(json!({"name":"Учитель", "low":false})).unwrap();
         assert!(old.animations);
+        assert_eq!(old.notification_seconds, 9);
         assert!(!old.low);
         assert_eq!(old.name, "Учитель");
         let disabled = Preferences {
             animations: false,
+            notification_seconds: 20,
             ..old
         };
         let saved = serde_json::to_vec(&disabled).unwrap();
         let restored: Preferences = serde_json::from_slice(&saved).unwrap();
         assert!(!restored.animations);
+        assert_eq!(restored.notification_seconds, 20);
     }
 }

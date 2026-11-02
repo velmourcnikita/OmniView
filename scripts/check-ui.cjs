@@ -8,14 +8,15 @@ const bundled=createRequire(path.join(process.env.RUNTIME_NODE_MODULES||path.joi
 const {chromium}=bundled('playwright');
 const root=path.resolve(__dirname,'..');
 const out=path.join(root,'presentation','.build','app-previews');
-const files={'/':'web/index.html','/app.js':'web/app.js','/lesson.js':'web/lesson.js','/styles.css':'web/styles.css','/AppRegular.ttf':'assets/fonts/AppRegular.ttf','/AppBold.ttf':'assets/fonts/AppBold.ttf'};
+const files={'/':'web/index.html','/app.js':'web/app.js','/lesson.js':'web/lesson.js','/control.js':'web/control.js','/styles.css':'web/styles.css','/AppRegular.ttf':'assets/fonts/AppRegular.ttf','/AppBold.ttf':'assets/fonts/AppBold.ttf'};
 const types={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.ttf':'font/ttf'};
 const server=http.createServer((req,res)=>{
+  if(req.url.startsWith('/preview/')){res.setHeader('Content-Type','image/svg+xml');res.end('<svg xmlns="http://www.w3.org/2000/svg" width="800" height="450"><rect width="800" height="450" fill="#20242b"/></svg>');return;}
   const file=files[req.url];if(!file){res.writeHead(404);res.end();return;}
   res.setHeader('Content-Type',types[path.extname(file)]);res.end(fs.readFileSync(path.join(root,file)));
 });
 const prefs={name:'Преподаватель',class_name:'Компьютерный класс',host:'127.0.0.1',low:true,theme:'dark',animations:true};
-const empty={version:'0.3.0',arch:'x86',role:'teacher',prefs,teacher:null,student:null,notice:{id:0,text:''},export_file:''};
+const empty={version:'0.5.0',arch:'x86',role:'teacher',prefs,teacher:null,student:null,notice:{id:0,text:''},export_file:''};
 (async()=>{
   fs.mkdirSync(out,{recursive:true});
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
@@ -58,7 +59,32 @@ const empty={version:'0.3.0',arch:'x86',role:'teacher',prefs,teacher:null,studen
     assert(await page.locator('#studentPanel').isVisible());
     await page.locator('#ackHelp').click();
     assert.deepEqual(await page.evaluate(()=>window.sent.at(-1)),{action:'ack_help',id:'a'});
+    assert(await page.locator('#requestControl').isDisabled());
+    const remote={...active,teacher:{...active.teacher,peers:[{...peers[0],sharing:true,frame:{seq:1},control:{active:false,request:null}},peers[1]]}};
+    await page.evaluate(s=>window.receiveState(s),remote);
+    await page.locator('#requestControl').click();
+    assert.deepEqual(await page.evaluate(()=>window.sent.at(-1)),{action:'control_request',id:'a',on:true});
+    const remotePeer=remote.teacher.peers[0];remotePeer.control.request={id:'local-consent',expires_at:Date.now()+300000};
+    await page.evaluate(s=>window.receiveState(s),remote);
+    await page.waitForFunction(()=>document.querySelector('#detailScreen').naturalWidth===800);
+    const before=await page.evaluate(()=>window.sent.filter(x=>x.action==='control_input').length);
+    await page.locator('#detailScreen').click();
+    assert.equal(await page.evaluate(()=>window.sent.filter(x=>x.action==='control_input').length),before);
+    remotePeer.control.active=true;await page.evaluate(s=>window.receiveState(s),remote);
+    await page.waitForFunction(()=>document.getAnimations().length===0);await page.screenshot({path:path.join(out,'remote-teacher.png'),fullPage:true});
+    await page.locator('#detailScreen').click();
+    const pointer=await page.evaluate(()=>window.sent.filter(x=>x.action==='control_input'));
+    assert(pointer.some(x=>x.request==='local-consent'&&x.events.some(e=>e.kind==='left'&&e.down)));
+    assert(pointer.some(x=>x.events.some(e=>e.kind==='left'&&!e.down)));
+    const move=pointer.flatMap(x=>x.events).find(e=>e.kind==='move');assert(Math.abs(move.x-32768)<1000&&Math.abs(move.y-32768)<1000);
+    await page.locator('#detailScreen').press('Backspace');
+    assert.equal(await page.evaluate(()=>window.sent.at(-1).events[0].vk),8);
+    await page.locator('#controlText').fill('Помощь ✓');await page.locator('#controlTextForm button').click();
+    assert.deepEqual(await page.evaluate(()=>window.sent.at(-1)),{action:'control_input',id:'a',request:'local-consent',events:[{kind:'text',text:'Помощь ✓'}]});
     await page.locator('[data-close="studentPanel"]').click();
+    await page.waitForFunction(()=>window.sent.at(-1).action==='control_request');
+    assert.deepEqual(await page.evaluate(()=>window.sent.at(-1)),{action:'control_request',id:'a',on:false});
+    await page.evaluate(s=>window.receiveState(s),active);
     await page.locator('#messageAll').click();
     await page.locator('#classMessage').fill('Привет классу 😀');
     await page.locator('#messageForm button').click();
@@ -67,9 +93,12 @@ const empty={version:'0.3.0',arch:'x86',role:'teacher',prefs,teacher:null,studen
     await page.locator('[data-view="settings"]').click();
     await page.locator('[name="name"]').fill('Учитель');
     await page.locator('[name="animations"]').uncheck();
+    await page.locator('[name="notification_seconds"]').fill('20');
     await page.locator('#settingsForm button[type="submit"]').click();
     assert.equal(await page.evaluate(()=>window.sent.at(-1).prefs.name),'Учитель');
     assert.equal(await page.evaluate(()=>window.sent.at(-1).prefs.animations),false);
+    assert.equal(await page.evaluate(()=>window.sent.at(-1).prefs.notification_seconds),20);
+    assert.equal(await page.locator('[name="notification_seconds"]').getAttribute('min'),'5');
     const disabled={...active,prefs:{...prefs,animations:false}};
     await page.evaluate(s=>window.receiveState(s),disabled);
     assert.equal(await page.locator('html').getAttribute('data-motion'),'off');
@@ -103,6 +132,23 @@ const empty={version:'0.3.0',arch:'x86',role:'teacher',prefs,teacher:null,studen
     await page.locator('#studentMessage').fill('Нужна помощь');
     await page.locator('#studentMessageForm button').click();
     assert.equal(await page.evaluate(()=>window.sent.at(-1).text),'Нужна помощь');
+    const offered={...joined,student:{...joined.student,control_request:{id:'local-consent',expires_at:Date.now()+300000}}};
+    await page.evaluate(s=>window.receiveState(s),offered);
+    assert(await page.locator('#allowControl').isDisabled());assert(!await page.locator('#remoteBanner').isVisible());
+    offered.student.sharing=true;await page.evaluate(s=>window.receiveState(s),offered);
+    await page.waitForFunction(()=>document.getAnimations().length===0);await page.screenshot({path:path.join(out,'remote-consent.png'),fullPage:true});
+    await page.locator('#allowControl').click();
+    assert.deepEqual(await page.evaluate(()=>window.sent.at(-1)),{action:'control_consent',on:true,request:'local-consent'});
+    offered.student.control_pending=true;offered.student.control_active=true;await page.evaluate(s=>window.receiveState(s),offered);
+    assert(await page.locator('#allowControl').isDisabled());assert(await page.locator('#remoteBanner').isVisible());
+    await page.waitForFunction(()=>document.getAnimations().length===0);await page.screenshot({path:path.join(out,'remote-active.png'),fullPage:true});
+    await page.setViewportSize({width:820,height:600});
+    assert(!await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),'Assistance overflow at minimum width');
+    const stopBox=await page.locator('#stopRemote').boundingBox();assert(stopBox&&stopBox.y>=0&&stopBox.y+stopBox.height<=600);
+    await page.waitForFunction(()=>document.getAnimations().length===0);await page.screenshot({path:path.join(out,'remote-compact.png'),fullPage:true});
+    await page.setViewportSize({width:1440,height:1000});
+    await page.locator('#stopRemote').click();assert.deepEqual(await page.evaluate(()=>window.sent.at(-1)),{action:'control_consent',on:false});
+    await page.evaluate(s=>window.receiveState(s),joined);assert(!await page.locator('#remoteBanner').isVisible());
     const question={id:'question-test',prompt:'Сколько бит в одном байте?',options:['4','8','16','32'],correct:1,opened_at:Date.now(),closes_at:Date.now()+60000,closed:false,invited:{a:'Анна',b:'Борис'},answers:{a:{name:'Анна',choice:1,elapsed_ms:1800},b:{name:'Борис',choice:2,elapsed_ms:3400}}};
     const assessment={policy:{active:true,blocked:['chrome.exe'],generation:1},events:[]};
     const lessonState={...active,teacher:{...active.teacher,lesson:{questions:[question]},assessment}};

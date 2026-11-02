@@ -11,22 +11,25 @@ use tao::{
 };
 pub struct Notifications {
     pub window: Window,
+    pub assisting: bool,
     title: String,
     text: String,
     until: Option<Instant>,
     seen: VecDeque<String>,
     initialized: bool,
+    seconds: u64,
+    pending: VecDeque<(String, String)>,
 }
 impl Notifications {
     pub fn save_preview(&self) -> Result<(), String> {
         use windows_sys::Win32::Graphics::Gdi::*;
         unsafe {
             let hwnd = self.window.hwnd() as _;
-            let source = GetDC(hwnd);
+            let source = GetWindowDC(hwnd);
             if source.is_null() {
                 return Err("Нет DC уведомления".into());
             }
-            let size = self.window.inner_size();
+            let size = self.window.outer_size();
             let w = size.width as i32;
             let h = size.height as i32;
             let dc = CreateCompatibleDC(source);
@@ -88,6 +91,8 @@ impl Notifications {
             .with_visible(false)
             .with_focused(false)
             .with_decorations(false)
+            .with_undecorated_shadow(false)
+            .with_focusable(false)
             .with_resizable(false)
             .with_skip_taskbar(true)
             .with_always_on_top(true)
@@ -96,11 +101,14 @@ impl Notifications {
             .map_err(|e| e.to_string())?;
         Ok(Self {
             window,
+            assisting: false,
             title: String::new(),
             text: String::new(),
             until: None,
             seen: VecDeque::new(),
             initialized: false,
+            seconds: 9,
+            pending: VecDeque::new(),
         })
     }
     fn remember(&mut self, key: String) -> bool {
@@ -114,7 +122,24 @@ impl Notifications {
         true
     }
     pub fn update(&mut self, s: &Value) {
+        self.seconds = s["prefs"]["notification_seconds"]
+            .as_u64()
+            .unwrap_or(9)
+            .clamp(5, 60);
         let student = s["role"] == "student";
+        let assisting = student && s["student"]["control_active"] == true;
+        if assisting {
+            if !self.assisting {
+                self.show("Удалённая помощь", "Мышь и клавиатура доступны учителю.");
+            }
+            self.assisting = true;
+            self.initialized = true;
+            return;
+        }
+        if self.assisting {
+            self.assisting = false;
+            self.dismiss();
+        }
         let messages = if student {
             s["student"]["messages"].as_array()
         } else {
@@ -135,6 +160,11 @@ impl Notifications {
             }
         }
         if student {
+            if let Some(id) = s["student"]["control_request"]["id"].as_str() {
+                if self.remember(format!("control:{id}")) {
+                    next=Some(("Запрос удалённой помощи".into(),"Учитель просит разрешить мышь и клавиатуру. Подтверди запрос в окне OmniView.".into()));
+                }
+            }
             if let Some(id) = s["student"]["question"]["id"].as_str() {
                 if self.remember(format!("question:{id}")) {
                     next = Some((
@@ -180,7 +210,13 @@ impl Notifications {
         }
         if self.initialized {
             if let Some((title, text)) = next {
-                self.show(&title, &text);
+                if self.until.is_some() {
+                    if self.pending.len() < 32 {
+                        self.pending.push_back((title, text));
+                    }
+                } else {
+                    self.show(&title, &text);
+                }
             }
         }
         self.initialized = true;
@@ -188,7 +224,7 @@ impl Notifications {
     pub fn show(&mut self, title: &str, text: &str) {
         self.title = title.chars().take(70).collect();
         self.text = text.chars().take(220).collect();
-        self.until = Some(Instant::now() + Duration::from_secs(9));
+        self.until = Some(Instant::now() + Duration::from_secs(self.seconds.clamp(5, 60)));
         if let Some(monitor) = self.window.current_monitor() {
             let p = monitor.position();
             let size = monitor.size();
@@ -199,6 +235,40 @@ impl Notifications {
                     p.x + size.width as i32 - own.width as i32 - margin,
                     p.y + size.height as i32 - own.height as i32 - margin - 60,
                 ));
+        }
+        // Remove the actual Win32 frame too: undecorated client rendering alone
+        // can still leave a classic title bar when Windows composition is off.
+        unsafe {
+            use windows_sys::Win32::UI::WindowsAndMessaging::*;
+            let hwnd = self.window.hwnd() as _;
+            let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
+            SetWindowLongW(
+                hwnd,
+                GWL_STYLE,
+                ((style
+                    & !(WS_CAPTION | WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX))
+                    | WS_POPUP) as i32,
+            );
+            let ex = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+            SetWindowLongW(
+                hwnd,
+                GWL_EXSTYLE,
+                ((ex & !(WS_EX_WINDOWEDGE
+                    | WS_EX_CLIENTEDGE
+                    | WS_EX_DLGMODALFRAME
+                    | WS_EX_APPWINDOW))
+                    | WS_EX_TOOLWINDOW
+                    | WS_EX_NOACTIVATE) as i32,
+            );
+            SetWindowPos(
+                hwnd,
+                std::ptr::null_mut(),
+                0,
+                0,
+                0,
+                0,
+                SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER,
+            );
         }
         unsafe {
             windows_sys::Win32::UI::WindowsAndMessaging::ShowWindow(
@@ -225,12 +295,22 @@ impl Notifications {
         self.window.request_redraw();
     }
     pub fn tick(&mut self) {
-        if self.until.is_some_and(|until| Instant::now() >= until) {
+        if !self.assisting && self.until.is_some_and(|until| Instant::now() >= until) {
             self.dismiss();
+        }
+        if !self.assisting && self.until.is_none() {
+            if let Some((title, text)) = self.pending.pop_front() {
+                self.show(&title, &text);
+            }
         }
     }
     pub fn dismiss(&mut self) {
-        self.window.set_visible(false);
+        unsafe {
+            windows_sys::Win32::UI::WindowsAndMessaging::ShowWindow(
+                self.window.hwnd() as _,
+                windows_sys::Win32::UI::WindowsAndMessaging::SW_HIDE,
+            );
+        }
         self.until = None;
     }
     pub fn paint(&self) {
@@ -395,7 +475,11 @@ impl Notifications {
             }
             SelectObject(dc, old_font);
             DeleteObject(measure_font as _);
-            for (i, line) in lines.iter().take(3).enumerate() {
+            for (i, line) in lines
+                .iter()
+                .take(if self.assisting { 1 } else { 3 })
+                .enumerate()
+            {
                 let text = if i == 2 && lines.len() > 3 {
                     format!("{line}…")
                 } else {
@@ -408,6 +492,45 @@ impl Notifications {
                     336.0,
                     21.0,
                     14.0,
+                    400,
+                    0x00bbc5b9,
+                );
+            }
+            if self.assisting {
+                let button = CreateSolidBrush(0x00bdd4bb);
+                let button_pen = CreatePen(PS_SOLID, 1, 0x00bdd4bb);
+                let previous_brush = SelectObject(dc, button as _);
+                let previous_pen = SelectObject(dc, button_pen as _);
+                RoundRect(
+                    dc,
+                    px(20.0),
+                    px(119.0),
+                    px(176.0),
+                    px(148.0),
+                    px(14.0),
+                    px(14.0),
+                );
+                SelectObject(dc, previous_brush);
+                SelectObject(dc, previous_pen);
+                DeleteObject(button as _);
+                DeleteObject(button_pen as _);
+                draw(
+                    "Остановить помощь",
+                    30.0,
+                    119.0,
+                    136.0,
+                    29.0,
+                    12.0,
+                    600,
+                    0x00212c20,
+                );
+                draw(
+                    "или нажми Esc",
+                    192.0,
+                    119.0,
+                    150.0,
+                    29.0,
+                    12.0,
                     400,
                     0x00bbc5b9,
                 );
@@ -434,22 +557,40 @@ impl Notifications {
 pub fn smoke_test() -> Result<(), String> {
     let event_loop = tao::event_loop::EventLoopBuilder::<()>::with_user_event().build();
     let mut notice = Notifications::new(&event_loop)?;
+    notice.seconds = 5;
     notice.show(
         "Учитель",
         "Проверь второй пункт задания. Это уведомление OmniView.",
     );
     let started = Instant::now();
+    let mut preview = None;
+    let mut visible_before_expiry = false;
+    let mut finished = false;
     event_loop.run(move |event, _, flow| {
+        if finished { *flow = tao::event_loop::ControlFlow::Exit; return; }
         *flow =
             tao::event_loop::ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(100));
         if matches!(event, tao::event::Event::RedrawRequested(_)) {
             notice.paint();
         }
-        if started.elapsed() > Duration::from_secs(1) {
-            let result = notice.save_preview();
+        notice.tick();
+        if preview.is_none() && started.elapsed() > Duration::from_secs(1) {
+            preview = Some(notice.save_preview());
+        }
+        if started.elapsed() >= Duration::from_millis(4500) && started.elapsed() < Duration::from_secs(5) {
+            visible_before_expiry = notice.window.is_visible();
+        }
+        if started.elapsed() > Duration::from_millis(5300) {
+            finished = true;
+            let result = preview.take().unwrap_or_else(|| Err("Нет снимка уведомления".into()));
+            let expired = !notice.window.is_visible();
+            let borderless = unsafe {
+                use windows_sys::Win32::UI::WindowsAndMessaging::*;
+                GetWindowLongW(notice.window.hwnd() as _, GWL_STYLE) as u32 & (WS_CAPTION | WS_THICKFRAME | WS_SYSMENU) == 0
+            };
             let _ = std::fs::write(
                 crate::app::data_dir().join("notification-smoke.json"),
-                serde_json::json!({"ok":result.is_ok(),"error":result.err(),"native_window":true})
+                serde_json::json!({"ok":result.is_ok() && visible_before_expiry && expired && borderless,"error":result.err(),"native_window":true,"borderless_popup":borderless,"visible_before_five_seconds":visible_before_expiry,"hidden_after_expiry":expired})
                     .to_string(),
             );
             notice.dismiss();

@@ -1,11 +1,13 @@
-param([string[]]$Architectures=@('x64','x86'))
+param([string[]]$Architectures=@('x64','x86'),[switch]$IncludeNativeInput)
 $ErrorActionPreference='Stop'
 $taskRoot=Split-Path -Parent $PSScriptRoot
 foreach($taskArch in $Architectures){
     $taskExe=Join-Path $taskRoot $(if($taskArch -eq 'x86'){'dist/win32/OmniView.exe'}else{'dist/OmniView.exe'})
     $taskOut=Join-Path $taskRoot "verification/$taskArch"
     New-Item -ItemType Directory -Path $taskOut -Force | Out-Null
-    foreach($taskCheck in @(@{Arg='--self-test';Report='self-test.json';Timeout=60000},@{Arg='--ui-smoke';Report='ui-smoke.json';Timeout=30000},@{Arg='--notification-test';Report='notification-smoke.json';Timeout=10000})){
+    $taskChecks=@(@{Arg='--self-test';Report='self-test.json';Timeout=60000},@{Arg='--ui-smoke';Report='ui-smoke.json';Timeout=30000},@{Arg='--notification-test';Report='notification-smoke.json';Timeout=10000})
+    if($IncludeNativeInput){$taskChecks+=@{Arg='--control-test';Report='control-smoke.json';Timeout=12000}}
+    foreach($taskCheck in $taskChecks){
         $taskSource=Join-Path $env:LOCALAPPDATA "OmniView/$($taskCheck.Report)"
         $taskStarted=[DateTime]::UtcNow
         $taskProcess=Start-Process -FilePath $taskExe -ArgumentList $taskCheck.Arg -WindowStyle Hidden -PassThru

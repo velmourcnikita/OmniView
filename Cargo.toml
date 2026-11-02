@@ -1,6 +1,6 @@
 [package]
 name = "omniview"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 description = "OmniView classroom console with a local WebView2 interface"
 license = "MIT"
@@ -20,7 +20,8 @@ windows-sys = { version = "0.59", features = [
   "Win32_Foundation",
   "Win32_Graphics_Gdi",
   "Win32_System_Diagnostics_ToolHelp",
-  "Win32_UI_WindowsAndMessaging"
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_UI_Input_KeyboardAndMouse"
 ] }
 
 [[bin]]

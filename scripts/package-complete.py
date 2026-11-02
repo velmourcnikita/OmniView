@@ -9,7 +9,7 @@ import struct
 import zipfile
 
 ROOT = Path(__file__).resolve().parent.parent
-OUTPUT = ROOT / 'dist' / 'OmniView-0.4-Complete.zip'
+OUTPUT = ROOT / 'dist' / 'OmniView-0.5-Complete.zip'
 EXCLUDED_DIRS = {'target', 'node_modules', '.git', '.codex', '__pycache__', 'verification'}
 
 

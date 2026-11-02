@@ -133,6 +133,8 @@ pub struct Poll {
     pub detections: Vec<crate::assessment::Detection>,
     #[serde(default)]
     pub monitor_error: Option<String>,
+    #[serde(default)]
+    pub control_grant: Option<String>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Update {
@@ -146,6 +148,12 @@ pub struct Update {
     pub question: Option<crate::lesson::StudentQuestion>,
     #[serde(default)]
     pub policy: crate::assessment::Policy,
+    #[serde(default)]
+    pub control_request: Option<crate::control::Request>,
+    #[serde(default)]
+    pub control_active: bool,
+    #[serde(default)]
+    pub control_events: Vec<crate::control::InputEvent>,
 }
 impl Update {
     fn rejected() -> Self {
@@ -158,6 +166,9 @@ impl Update {
             broadcast: None,
             question: None,
             policy: crate::assessment::Policy::default(),
+            control_request: None,
+            control_active: false,
+            control_events: vec![],
         }
     }
 }
@@ -202,6 +213,7 @@ fn tls_client(
 }
 #[derive(Clone, Serialize)]
 pub struct Peer {
+    pub control: crate::control::Session,
     pub monitoring: bool,
     pub monitor_error: Option<String>,
     pub id: String,
@@ -367,6 +379,7 @@ impl Teacher {
             }
             bound = poll.id.clone();
             let p = peers.entry(poll.id.clone()).or_insert_with(|| Peer {
+                control: crate::control::Session::default(),
                 monitoring: false,
                 monitor_error: None,
                 id: poll.id.clone(),
@@ -390,6 +403,11 @@ impl Teacher {
             p.online = true;
             p.help = poll.help;
             p.sharing = poll.sharing;
+            p.control
+                .update(poll.control_grant.as_deref(), poll.sharing, now());
+            let control_request = p.control.request.clone();
+            let control_active = p.control.active;
+            let control_events = p.control.drain();
             p.last = Some(Instant::now());
             p.last_seen = now();
             if poll.sharing {
@@ -450,6 +468,9 @@ impl Teacher {
                     broadcast,
                     question,
                     policy,
+                    control_request,
+                    control_active,
+                    control_events,
                 },
             )
             .is_err()
@@ -466,6 +487,7 @@ impl Teacher {
                 p.online = false;
                 p.frame = None;
                 p.sharing = false;
+                p.control.stop();
             }
         }
         (self.changed)();
@@ -475,12 +497,41 @@ impl Teacher {
         for p in &mut ps {
             p.online = p.online && p.last.is_some_and(|l| l.elapsed() < Duration::from_secs(9));
             if !p.online {
+                p.control.stop();
                 p.frame = None;
                 p.sharing = false;
             }
         }
         ps.sort_by(|a, b| a.name.cmp(&b.name));
         ps
+    }
+    pub fn request_control(&self, id: &str, on: bool) -> Result<(), String> {
+        let mut peers = self.peers.lock().unwrap();
+        let p = peers.get_mut(id).ok_or("Ученик не найден")?;
+        if on {
+            if !p.online || !p.sharing {
+                return Err("Ученик должен подключиться и включить показ экрана".into());
+            }
+            p.control.request(now())?;
+        } else {
+            p.control.stop();
+        }
+        (self.changed)();
+        Ok(())
+    }
+    pub fn control_input(
+        &self,
+        id: &str,
+        request: &str,
+        events: Vec<crate::control::InputEvent>,
+    ) -> Result<(), String> {
+        self.peers
+            .lock()
+            .unwrap()
+            .get_mut(id)
+            .ok_or("Ученик не найден")?
+            .control
+            .enqueue(request, events, now())
     }
     pub fn send(&self, target: &str, text: &str) -> Result<usize, String> {
         let text = clean(text, 1000);
@@ -542,6 +593,10 @@ impl Teacher {
 }
 #[derive(Clone, Serialize)]
 pub struct StudentState {
+    pub control_request: Option<crate::control::Request>,
+    pub control_grant: Option<String>,
+    pub control_active: bool,
+    pub control_error: Option<String>,
     pub policy: crate::assessment::Policy,
     pub monitoring: bool,
     pub detections: Vec<crate::assessment::Detection>,
@@ -559,6 +614,7 @@ pub struct StudentState {
     pub note: String,
 }
 pub struct Student {
+    pub input: crate::control::InputGate,
     pub state: Mutex<StudentState>,
     pub stop: AtomicBool,
     pub low: AtomicBool,
@@ -580,7 +636,12 @@ impl Student {
         let config = invite.config()?;
         let id = random()?;
         let s = Arc::new(Self {
+            input: crate::control::InputGate::default(),
             state: Mutex::new(StudentState {
+                control_request: None,
+                control_grant: None,
+                control_active: false,
+                control_error: None,
                 policy: crate::assessment::Policy::default(),
                 monitoring: false,
                 detections: vec![],
@@ -602,6 +663,21 @@ impl Student {
             changed,
         });
         let student = s.clone();
+        let watchdog = s.clone();
+        std::thread::spawn(move || {
+            while !watchdog.stop.load(Ordering::Relaxed) {
+                let mut st = watchdog.state.lock().unwrap();
+                if watchdog.input.watchdog() {
+                    st.control_grant = None;
+                    st.control_active = false;
+                    st.control_error=Some("Управление остановлено: Esc, истечение разрешения или пауза связи более 2 секунд".into());
+                    (watchdog.changed)();
+                }
+                drop(st);
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            watchdog.input.revoke();
+        });
         std::thread::spawn(move || {
             let result = (|| -> Result<(), String> {
                 let mut stream = tls_client(&invite, config)?;
@@ -632,7 +708,8 @@ impl Student {
                         }
                     }
                     let share = student.state.lock().unwrap().sharing;
-                    let low = student.low.load(Ordering::Relaxed);
+                    let low = student.low.load(Ordering::Relaxed)
+                        && student.state.lock().unwrap().control_grant.is_none();
                     let frame = if share
                         && last.elapsed() >= Duration::from_millis(if low { 5000 } else { 250 })
                     {
@@ -661,6 +738,7 @@ impl Student {
                             st.monitor_error.clone(),
                         )
                     };
+                    let control_grant = student.state.lock().unwrap().control_grant.clone();
                     let poll = Poll {
                         token: invite.token.clone(),
                         id: id.clone(),
@@ -675,6 +753,7 @@ impl Student {
                         monitor_generation,
                         detections,
                         monitor_error,
+                        control_grant,
                     };
                     write_packet(&mut stream, &poll)?;
                     let u: Update = read_packet(&mut stream)?;
@@ -686,6 +765,36 @@ impl Student {
                     }
                     {
                         let mut st = student.state.lock().unwrap();
+                        let request_id = u.control_request.as_ref().map(|r| r.id.as_str());
+                        if st.control_grant.as_deref() != request_id {
+                            st.control_grant = None;
+                        }
+                        st.control_request = u.control_request.clone();
+                        st.control_active = u.control_active
+                            && st.sharing
+                            && st.control_grant.is_some()
+                            && st.control_grant.as_deref() == request_id;
+                        let delivery = if st.sharing {
+                            st.control_grant.clone()
+                        } else {
+                            None
+                        };
+                        // Keep the state and the native gate in one critical section:
+                        // an older reply must never revoke newly granted local consent.
+                        if let Some(id) = delivery {
+                            let events = if u.control_active {
+                                u.control_events.as_slice()
+                            } else {
+                                &[]
+                            };
+                            if let Err(e) = student.input.deliver(&id, events) {
+                                st.control_grant = None;
+                                st.control_active = false;
+                                st.control_error = Some(e);
+                            }
+                        } else {
+                            student.input.revoke();
+                        }
                         st.connected = true;
                         if st.policy != u.policy {
                             st.monitoring = false;
@@ -740,13 +849,20 @@ impl Student {
                             break;
                         }
                         std::thread::sleep(Duration::from_millis(100));
+                        if low && student.state.lock().unwrap().control_grant.is_some() {
+                            break;
+                        }
                     }
                 }
                 let _ = stream.sock.shutdown(Shutdown::Both);
                 Ok(())
             })();
             {
+                student.input.revoke();
                 let mut st = student.state.lock().unwrap();
+                st.control_grant = None;
+                st.control_active = false;
+                st.control_request = None;
                 st.connected = false;
                 st.monitoring = false;
                 st.detections.clear();
@@ -769,7 +885,11 @@ impl Student {
     pub fn end(&self) {
         self.stop.store(true, Ordering::Relaxed);
         let mut s = self.state.lock().unwrap();
+        self.input.revoke();
         s.sharing = false;
+        s.control_grant = None;
+        s.control_request = None;
+        s.control_active = false;
         s.monitoring = false;
         s.detections.clear();
         s.monitor_error = None;
@@ -781,7 +901,14 @@ impl Student {
         (self.changed)();
     }
     pub fn share(&self, on: bool) {
-        self.state.lock().unwrap().sharing = on;
+        let mut st = self.state.lock().unwrap();
+        st.sharing = on;
+        if !on {
+            st.control_grant = None;
+            st.control_active = false;
+            self.input.revoke();
+        }
+        drop(st);
         (self.changed)();
     }
     pub fn help(&self) {
@@ -930,10 +1057,49 @@ pub fn worker_self_test() -> Result<(), String> {
         wait("показ экрана ученика", || {
             t.list()[0].frame.is_some()
         })?;
+        t.request_control(&p.id, true)?;
+        wait("запрос управления", || {
+            s.state.lock().unwrap().control_request.is_some()
+        })?;
+        if s.state.lock().unwrap().control_active || t.list()[0].control.active {
+            return Err("Управление включилось без согласия".into());
+        }
+        {
+            let mut st = s.state.lock().unwrap();
+            let id = st.control_request.as_ref().unwrap().id.clone();
+            s.input.authorize(id.clone());
+            st.control_grant = Some(id);
+        }
+        wait(
+            "согласие управления без событий ввода",
+            || s.state.lock().unwrap().control_active && t.list()[0].control.active,
+        )?;
+        s.input.revoke();
+        {
+            let mut st = s.state.lock().unwrap();
+            st.control_grant = None;
+            st.control_active = false;
+        }
+        wait("отзыв управления", || {
+            t.list()[0].control.request.is_none()
+        })?;
+        t.request_control(&p.id, true)?;
+        wait("повторный запрос", || {
+            s.state.lock().unwrap().control_request.is_some()
+        })?;
+        {
+            let mut st = s.state.lock().unwrap();
+            let id = st.control_request.as_ref().unwrap().id.clone();
+            s.input.authorize(id.clone());
+            st.control_grant = Some(id);
+        }
+        wait("повторное согласие", || {
+            s.state.lock().unwrap().control_active
+        })?;
         s.share(false);
         wait("отключение показа ученика", || {
             let p = &t.list()[0];
-            !p.sharing && p.frame.is_none()
+            !p.sharing && p.frame.is_none() && p.control.request.is_none()
         })?;
         t.set_broadcast(true);
         wait("показ экрана учителя", || {
@@ -974,6 +1140,7 @@ pub fn network_self_test() -> Result<(), String> {
             monitor_generation: 0,
             detections: vec![],
             monitor_error: None,
+            control_grant: None,
         };
         write_packet(&mut s, &p).map_err(|e| format!("First write: {e}"))?;
         let u: Update = read_packet(&mut s).map_err(|e| format!("First read: {e}"))?;
@@ -988,6 +1155,48 @@ pub fn network_self_test() -> Result<(), String> {
         if !u.help_ack || u.messages.first().map(|m| m.text.as_str()) != Some("Привет | = _ 😀")
         {
             return Err("Не прошла передача сообщения или помощь".into());
+        }
+        // Exercise the real TLS queue without delivering input to Windows.
+        p.sharing = true;
+        write_packet(&mut s, &p)?;
+        let _: Update = read_packet(&mut s)?;
+        t.request_control(&p.id, true)?;
+        write_packet(&mut s, &p)?;
+        let u: Update = read_packet(&mut s)?;
+        let request = u.control_request.ok_or("Нет запроса управления")?.id;
+        if u.control_active {
+            return Err("Управление без согласия".into());
+        }
+        p.control_grant = Some("wrong-request".into());
+        write_packet(&mut s, &p)?;
+        let u: Update = read_packet(&mut s)?;
+        if u.control_active {
+            return Err("Принят чужой запрос".into());
+        }
+        p.control_grant = Some(request.clone());
+        write_packet(&mut s, &p)?;
+        let u: Update = read_packet(&mut s)?;
+        if !u.control_active {
+            return Err("Согласие не получено".into());
+        }
+        t.control_input(
+            &p.id,
+            &request,
+            vec![crate::control::InputEvent::Move { x: 123, y: 456 }],
+        )?;
+        write_packet(&mut s, &p)?;
+        let u: Update = read_packet(&mut s)?;
+        if !matches!(
+            u.control_events.as_slice(),
+            [crate::control::InputEvent::Move { x: 123, y: 456 }]
+        ) {
+            return Err("Очередь ввода не передана".into());
+        }
+        p.control_grant = None;
+        write_packet(&mut s, &p)?;
+        let u: Update = read_packet(&mut s)?;
+        if u.control_active || u.control_request.is_some() || !u.control_events.is_empty() {
+            return Err("Управление не отозвано".into());
         }
         p.token = "invalid".into();
         write_packet(&mut s, &p).map_err(|e| format!("Reject write: {e}"))?;
