@@ -10,7 +10,7 @@ function renderControl(){const p=controlledPeer(),s=state?.student,req=s?.contro
  $('#controlStateLabel').textContent=p?.control?.active?'Согласие получено':p?.control?.request?'Ждём согласия':'По запросу';
  $('.remote-controls').dataset.status=p?.control?.active?'active':p?.control?.request?'pending':'idle';
  $('#detailScreen').classList.toggle('remote-enabled',Boolean(p?.control?.active));$('#controlTextForm').hidden=!p?.control?.active;
- $('#controlOffer').hidden=!s?.connected||!req;$('#allowControl').disabled=!s?.sharing||Boolean(s?.control_pending);$('#denyControl').disabled=!s?.control_pending;
+ $('#controlOffer').hidden=!s?.connected||!req||Boolean(s?.control_active);$('#allowControl').disabled=!s?.sharing||Boolean(s?.control_pending);$('#denyControl').disabled=!s?.control_pending;
  $('#allowControl').hidden=Boolean(s?.control_pending);$('#denyControl').hidden=!s?.control_pending;
  $('#controlOfferTitle').textContent=s?.control_active?'Помощь подключена':s?.control_pending?'Подключаем помощь…':'Разрешить управление?';
  $('#controlOfferDescription').textContent=s?.control_active?'Мышь и клавиатура доступны преподавателю. Ты можешь остановить помощь в любой момент.':'Преподаватель сможет нажимать кнопки и вводить текст на этом компьютере.';

@@ -1,6 +1,6 @@
 [package]
 name = "omniview"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 description = "OmniView classroom console with a local WebView2 interface"
 license = "MIT"

@@ -340,8 +340,8 @@ impl Notifications {
                 return;
             }
             let old_bitmap = SelectObject(dc, bitmap as _);
-            let fill = CreateSolidBrush(0x00262b25);
-            let border = CreatePen(PS_SOLID, px(1.0).max(1), 0x00434d40);
+            let fill = CreateSolidBrush(0x00202020);
+            let border = CreatePen(PS_SOLID, px(1.0).max(1), 0x003c3c3c);
             let old_brush = SelectObject(dc, fill as _);
             let old_pen = SelectObject(dc, border as _);
             RoundRect(
@@ -353,9 +353,9 @@ impl Notifications {
                 px(40.0),
                 px(40.0),
             );
-            let accent = CreateSolidBrush(0x00bdd4bb);
+            let accent = CreateSolidBrush(0x00eeeeee);
             SelectObject(dc, accent as _);
-            let accent_pen = CreatePen(PS_SOLID, 1, 0x00bdd4bb);
+            let accent_pen = CreatePen(PS_SOLID, 1, 0x00eeeeee);
             SelectObject(dc, accent_pen as _);
             RoundRect(
                 dc,
@@ -366,10 +366,10 @@ impl Notifications {
                 px(15.0),
                 px(15.0),
             );
-            let icon_pen = CreatePen(PS_SOLID, px(1.5).max(1), 0x00212c20);
+            let icon_pen = CreatePen(PS_SOLID, px(1.5).max(1), 0x00141414);
             SelectObject(dc, icon_pen as _);
             Ellipse(dc, px(22.0), px(23.0), px(40.0), px(35.0));
-            let pupil = CreateSolidBrush(0x00212c20);
+            let pupil = CreateSolidBrush(0x00141414);
             SelectObject(dc, pupil as _);
             Ellipse(dc, px(28.0), px(26.0), px(34.0), px(32.0));
             SelectObject(dc, old_brush);
@@ -381,7 +381,7 @@ impl Notifications {
             DeleteObject(icon_pen as _);
             DeleteObject(pupil as _);
             SetBkMode(dc, TRANSPARENT as i32);
-            let close_pen = CreatePen(PS_SOLID, px(1.3).max(1), 0x00a0ab9f);
+            let close_pen = CreatePen(PS_SOLID, px(1.3).max(1), 0x00aaaaaa);
             let old = SelectObject(dc, close_pen as _);
             MoveToEx(dc, px(349.0), px(24.0), std::ptr::null_mut());
             LineTo(dc, px(357.0), px(32.0));
@@ -433,8 +433,8 @@ impl Notifications {
                 SelectObject(dc, old);
                 DeleteObject(font as _);
             };
-            draw("OmniView", 54.0, 20.0, 200.0, 22.0, 13.0, 500, 0x00bdc8bc);
-            draw(&self.title, 20.0, 57.0, 336.0, 24.0, 16.0, 600, 0x00eef4eb);
+            draw("OmniView", 54.0, 20.0, 200.0, 22.0, 13.0, 500, 0x00bbbbbb);
+            draw(&self.title, 20.0, 57.0, 336.0, 24.0, 16.0, 600, 0x00eeeeee);
             let measure_font = CreateFontW(
                 -px(14.0),
                 0,
@@ -493,12 +493,12 @@ impl Notifications {
                     21.0,
                     14.0,
                     400,
-                    0x00bbc5b9,
+                    0x00bbbbbb,
                 );
             }
             if self.assisting {
-                let button = CreateSolidBrush(0x00bdd4bb);
-                let button_pen = CreatePen(PS_SOLID, 1, 0x00bdd4bb);
+                let button = CreateSolidBrush(0x00eeeeee);
+                let button_pen = CreatePen(PS_SOLID, 1, 0x00eeeeee);
                 let previous_brush = SelectObject(dc, button as _);
                 let previous_pen = SelectObject(dc, button_pen as _);
                 RoundRect(
@@ -522,7 +522,7 @@ impl Notifications {
                     29.0,
                     12.0,
                     600,
-                    0x00212c20,
+                    0x00141414,
                 );
                 draw(
                     "или нажми Esc",
@@ -532,7 +532,7 @@ impl Notifications {
                     29.0,
                     12.0,
                     400,
-                    0x00bbc5b9,
+                    0x00bbbbbb,
                 );
             }
             BitBlt(

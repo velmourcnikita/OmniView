@@ -9,7 +9,7 @@ import struct
 import zipfile
 
 ROOT = Path(__file__).resolve().parent.parent
-OUTPUT = ROOT / 'dist' / 'OmniView-0.5-Complete.zip'
+OUTPUT = ROOT / 'dist' / 'OmniView-0.5.1-Complete.zip'
 EXCLUDED_DIRS = {'target', 'node_modules', '.git', '.codex', '__pycache__', 'verification'}
 
 
@@ -27,6 +27,10 @@ def files():
         for name in sorted(names):
             source = folder / name
             if source == OUTPUT or ('Complete' in name and source.suffix == '.zip') or source == ROOT / 'dist.7z':
+                continue
+            if relative.as_posix() == 'dist' and name.startswith('OmniView-') and name.endswith('.zip') and not name.startswith('OmniView-0.5.1-'):
+                continue
+            if name.endswith('-reviewed.pptx'):
                 continue
             if relative.as_posix() == 'presentation/.build' and source.suffix != '.mjs':
                 continue
@@ -58,10 +62,20 @@ def main():
                 assert struct.unpack_from('<H', data, pe + 4)[0] == machine
         import io
         import re
-        deck = archive.read('OmniView/presentation/output/OmniView-0.3-Presentation.pptx')
+        from PIL import Image
+        from xml.etree import ElementTree as ET
+        import posixpath
+        deck = archive.read('OmniView/presentation/output/OmniView-0.5.1-Presentation.pptx')
         with zipfile.ZipFile(io.BytesIO(deck)) as pptx:
             assert len([n for n in pptx.namelist() if re.fullmatch(r'ppt/slides/slide\d+\.xml', n)]) == 12
             assert len([n for n in pptx.namelist() if re.fullmatch(r'ppt/notesSlides/notesSlide\d+\.xml', n)]) == 12
+            relationships = ET.fromstring(pptx.read('ppt/slides/_rels/slide12.xml.rels'))
+            images = [posixpath.normpath(posixpath.join('ppt/slides', r.attrib['Target'])).lstrip('/')
+                      for r in relationships if r.attrib['Type'].endswith('/image')]
+            assert any(n.endswith('.gif') and Image.open(io.BytesIO(pptx.read(n))).n_frames > 1
+                       for n in images), 'Slide 12 must embed an animated GIF'
+        demo = archive.read('OmniView/presentation/output/OmniView-0.5.1-Demo.gif')
+        assert Image.open(io.BytesIO(demo)).n_frames > 1
         assert 'OmniView/src/main.rs' in archive.namelist()
         assert 'OmniView/НАЧАТЬ ЗДЕСЬ.txt' in archive.namelist()
         assert all('/target/' not in n and '/node_modules/' not in n for n in archive.namelist())

@@ -16,7 +16,7 @@ const server=http.createServer((req,res)=>{
   res.setHeader('Content-Type',types[path.extname(file)]);res.end(fs.readFileSync(path.join(root,file)));
 });
 const prefs={name:'Преподаватель',class_name:'Компьютерный класс',host:'127.0.0.1',low:true,theme:'dark',animations:true};
-const empty={version:'0.5.0',arch:'x86',role:'teacher',prefs,teacher:null,student:null,notice:{id:0,text:''},export_file:''};
+const empty={version:'0.5.1',arch:'x86',role:'teacher',prefs,teacher:null,student:null,notice:{id:0,text:''},export_file:''};
 (async()=>{
   fs.mkdirSync(out,{recursive:true});
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
