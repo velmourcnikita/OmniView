@@ -1,0 +1,7 @@
+[target.i686-pc-windows-gnullvm]
+linker = "i686-w64-mingw32-clang"
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[env]
+CC_i686_pc_windows_gnullvm = "i686-w64-mingw32-clang"
+AR_i686_pc_windows_gnullvm = "i686-w64-mingw32-ar"
