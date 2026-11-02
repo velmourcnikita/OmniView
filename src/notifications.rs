@@ -91,7 +91,7 @@ impl Notifications {
             .with_resizable(false)
             .with_skip_taskbar(true)
             .with_always_on_top(true)
-            .with_inner_size(tao::dpi::LogicalSize::new(360.0, 156.0))
+            .with_inner_size(tao::dpi::LogicalSize::new(380.0, 164.0))
             .build(target)
             .map_err(|e| e.to_string())?;
         Ok(Self {
@@ -206,6 +206,22 @@ impl Notifications {
                 windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNOACTIVATE,
             );
         }
+        unsafe {
+            use windows_sys::Win32::Graphics::Gdi::*;
+            let size = self.window.inner_size();
+            let radius = (20.0 * self.window.scale_factor()) as i32;
+            let region = CreateRoundRectRgn(
+                0,
+                0,
+                size.width as i32 + 1,
+                size.height as i32 + 1,
+                radius * 2,
+                radius * 2,
+            );
+            if SetWindowRgn(self.window.hwnd() as _, region, 1) == 0 {
+                DeleteObject(region as _);
+            }
+        }
         self.window.request_redraw();
     }
     pub fn tick(&mut self) {
@@ -218,31 +234,128 @@ impl Notifications {
         self.until = None;
     }
     pub fn paint(&self) {
-        use windows_sys::Win32::{Foundation::RECT, Graphics::Gdi::*};
+        use windows_sys::Win32::{
+            Foundation::{RECT, SIZE},
+            Graphics::Gdi::*,
+        };
         unsafe {
             let hwnd = self.window.hwnd() as _;
-            let dc = GetDC(hwnd);
-            if dc.is_null() {
+            let target = GetDC(hwnd);
+            if target.is_null() {
                 return;
             }
             let size = self.window.inner_size();
             let scale = self.window.scale_factor();
-            let px = |v: f64| (v * scale) as i32;
-            let mut rect = RECT {
-                left: 0,
-                top: 0,
-                right: size.width as i32,
-                bottom: size.height as i32,
-            };
-            let bg = CreateSolidBrush(0x001c2219);
-            FillRect(dc, &rect, bg);
-            DeleteObject(bg as _);
+            let px = |v: f64| (v * scale).round() as i32;
+            let dc = CreateCompatibleDC(target);
+            let bitmap = CreateCompatibleBitmap(target, size.width as i32, size.height as i32);
+            if dc.is_null() || bitmap.is_null() {
+                if !bitmap.is_null() {
+                    DeleteObject(bitmap as _);
+                }
+                if !dc.is_null() {
+                    DeleteDC(dc);
+                }
+                ReleaseDC(hwnd, target);
+                return;
+            }
+            let old_bitmap = SelectObject(dc, bitmap as _);
+            let fill = CreateSolidBrush(0x00262b25);
+            let border = CreatePen(PS_SOLID, px(1.0).max(1), 0x00434d40);
+            let old_brush = SelectObject(dc, fill as _);
+            let old_pen = SelectObject(dc, border as _);
+            RoundRect(
+                dc,
+                0,
+                0,
+                size.width as i32,
+                size.height as i32,
+                px(40.0),
+                px(40.0),
+            );
             let accent = CreateSolidBrush(0x00bdd4bb);
-            rect.right = px(4.0);
-            FillRect(dc, &rect, accent);
+            SelectObject(dc, accent as _);
+            let accent_pen = CreatePen(PS_SOLID, 1, 0x00bdd4bb);
+            SelectObject(dc, accent_pen as _);
+            RoundRect(
+                dc,
+                px(18.0),
+                px(16.0),
+                px(44.0),
+                px(42.0),
+                px(15.0),
+                px(15.0),
+            );
+            let icon_pen = CreatePen(PS_SOLID, px(1.5).max(1), 0x00212c20);
+            SelectObject(dc, icon_pen as _);
+            Ellipse(dc, px(22.0), px(23.0), px(40.0), px(35.0));
+            let pupil = CreateSolidBrush(0x00212c20);
+            SelectObject(dc, pupil as _);
+            Ellipse(dc, px(28.0), px(26.0), px(34.0), px(32.0));
+            SelectObject(dc, old_brush);
+            SelectObject(dc, old_pen);
+            DeleteObject(fill as _);
+            DeleteObject(border as _);
             DeleteObject(accent as _);
+            DeleteObject(accent_pen as _);
+            DeleteObject(icon_pen as _);
+            DeleteObject(pupil as _);
+            SetBkMode(dc, TRANSPARENT as i32);
+            let close_pen = CreatePen(PS_SOLID, px(1.3).max(1), 0x00a0ab9f);
+            let old = SelectObject(dc, close_pen as _);
+            MoveToEx(dc, px(349.0), px(24.0), std::ptr::null_mut());
+            LineTo(dc, px(357.0), px(32.0));
+            MoveToEx(dc, px(357.0), px(24.0), std::ptr::null_mut());
+            LineTo(dc, px(349.0), px(32.0));
+            SelectObject(dc, old);
+            DeleteObject(close_pen as _);
             let face: Vec<u16> = "Google Sans\0".encode_utf16().collect();
-            let font = CreateFontW(
+            let draw = |text: &str,
+                        x: f64,
+                        y: f64,
+                        width: f64,
+                        height: f64,
+                        font_size: f64,
+                        weight: i32,
+                        color: u32| {
+                let font = CreateFontW(
+                    -px(font_size),
+                    0,
+                    0,
+                    0,
+                    weight,
+                    0,
+                    0,
+                    0,
+                    1,
+                    0,
+                    0,
+                    5,
+                    0,
+                    face.as_ptr(),
+                );
+                let old = SelectObject(dc, font as _);
+                SetTextColor(dc, color);
+                let mut r = RECT {
+                    left: px(x),
+                    top: px(y),
+                    right: px(x + width),
+                    bottom: px(y + height),
+                };
+                let chars: Vec<u16> = text.encode_utf16().collect();
+                DrawTextW(
+                    dc,
+                    chars.as_ptr(),
+                    chars.len() as i32,
+                    &mut r,
+                    DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS,
+                );
+                SelectObject(dc, old);
+                DeleteObject(font as _);
+            };
+            draw("OmniView", 54.0, 20.0, 200.0, 22.0, 13.0, 500, 0x00bdc8bc);
+            draw(&self.title, 20.0, 57.0, 336.0, 24.0, 16.0, 600, 0x00eef4eb);
+            let measure_font = CreateFontW(
                 -px(14.0),
                 0,
                 0,
@@ -254,37 +367,66 @@ impl Notifications {
                 1,
                 0,
                 0,
-                4,
+                5,
                 0,
                 face.as_ptr(),
             );
-            let old = SelectObject(dc, font as _);
-            SetBkMode(dc, TRANSPARENT as i32);
-            SetTextColor(dc, 0x00bdd4bb);
-            let draw = |text: &str, y: f64, height: f64| {
-                let mut r = RECT {
-                    left: px(18.0),
-                    top: px(y),
-                    right: size.width as i32 - px(18.0),
-                    bottom: px(y + height),
+            let old_font = SelectObject(dc, measure_font as _);
+            let mut lines = Vec::new();
+            let mut line = String::new();
+            for word in self.text.split_whitespace() {
+                let candidate = if line.is_empty() {
+                    word.to_string()
+                } else {
+                    format!("{line} {word}")
                 };
-                let text: Vec<u16> = text.encode_utf16().collect();
-                DrawTextW(
-                    dc,
-                    text.as_ptr(),
-                    text.len() as i32,
-                    &mut r,
-                    DT_WORDBREAK | DT_NOPREFIX | DT_END_ELLIPSIS,
+                let chars: Vec<u16> = candidate.encode_utf16().collect();
+                let mut measured: SIZE = std::mem::zeroed();
+                GetTextExtentPoint32W(dc, chars.as_ptr(), chars.len() as i32, &mut measured);
+                if measured.cx > px(336.0) && !line.is_empty() {
+                    lines.push(std::mem::take(&mut line));
+                    line = word.to_string();
+                } else {
+                    line = candidate;
+                }
+            }
+            if !line.is_empty() {
+                lines.push(line);
+            }
+            SelectObject(dc, old_font);
+            DeleteObject(measure_font as _);
+            for (i, line) in lines.iter().take(3).enumerate() {
+                let text = if i == 2 && lines.len() > 3 {
+                    format!("{line}…")
+                } else {
+                    line.clone()
+                };
+                draw(
+                    &text,
+                    20.0,
+                    86.0 + i as f64 * 21.0,
+                    336.0,
+                    21.0,
+                    14.0,
+                    400,
+                    0x00bbc5b9,
                 );
-            };
-            draw("OmniView · OmniCONTROL", 12.0, 22.0);
-            SetTextColor(dc, 0x00e9f2ef);
-            draw(&self.title, 38.0, 22.0);
-            SetTextColor(dc, 0x009da99c);
-            draw(&self.text, 66.0, 61.0);
-            SelectObject(dc, old);
-            DeleteObject(font as _);
-            ReleaseDC(hwnd, dc);
+            }
+            BitBlt(
+                target,
+                0,
+                0,
+                size.width as i32,
+                size.height as i32,
+                dc,
+                0,
+                0,
+                SRCCOPY,
+            );
+            SelectObject(dc, old_bitmap);
+            DeleteObject(bitmap as _);
+            DeleteDC(dc);
+            ReleaseDC(hwnd, target);
         }
     }
 }

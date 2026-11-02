@@ -4,9 +4,15 @@
 
 [Загрузки](https://github.com/velmourcnikita/OmniView/releases) · [Проверки сборок](https://github.com/velmourcnikita/OmniView/actions) · [Сценарий защиты](docs/competition.md)
 
+[![Сборка и тесты](https://github.com/velmourcnikita/OmniView/actions/workflows/verify.yml/badge.svg?branch=main)](https://github.com/velmourcnikita/OmniView/actions/workflows/verify.yml)
+
 ![Задания и результаты](site/public/screens/lesson-results.png)
 
 Скриншот показывает реальный интерфейс с подготовленными данными. Это не результаты испытаний в школе.
+
+Уведомления появляются в отдельной карточке программы, в том числе поверх других окон:
+
+![Уведомление OmniView](site/public/screens/notification.jpg)
 
 ## Возможности версии 0.4
 

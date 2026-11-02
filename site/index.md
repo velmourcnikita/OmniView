@@ -31,4 +31,10 @@ hero:
 
 ## Проверки и исходники
 
-Код и настройки автоматических проверок: [velmourcnikita/OmniView](https://github.com/velmourcnikita/OmniView). Статус запуска проверок смотри во вкладке Actions репозитория.
+[![Проверка сборок и тестов](https://github.com/velmourcnikita/OmniView/actions/workflows/verify.yml/badge.svg?branch=main)](https://github.com/velmourcnikita/OmniView/actions/workflows/verify.yml)
+
+Каждое изменение в основной ветке проходит сборку Windows x86/x64, тесты программы и проверку сайта. Бейдж показывает текущий результат GitHub Actions; подробности открываются по нажатию.
+
+Для релизных архивов workflow формирует подтверждение происхождения — связь файла с кодом и запуском сборки в этом репозитории. [Как проверить релиз](/download#проверка-файла).
+
+Код: [velmourcnikita/OmniView](https://github.com/velmourcnikita/OmniView).

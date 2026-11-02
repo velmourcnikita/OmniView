@@ -91,8 +91,9 @@ impl Core {
         })
     }
     pub fn feedback(&self, message: &str) {
+        let mut notice = self.notice.lock().unwrap();
         let rev = self.rev.fetch_add(1, Ordering::Relaxed) + 1;
-        *self.notice.lock().unwrap() = (rev, message.to_string());
+        *notice = (rev, message.to_string());
     }
     pub fn snapshot(&self) -> Value {
         let teacher = self.teacher.lock().unwrap();

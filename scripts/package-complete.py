@@ -18,6 +18,8 @@ def files():
         folder = Path(current)
         relative = folder.relative_to(ROOT)
         directories[:] = sorted(d for d in directories if d not in EXCLUDED_DIRS)
+        if relative.as_posix() == '.':
+            directories[:] = [d for d in directories if d != 'site-dist']
         if relative.as_posix() == 'site/.vitepress':
             directories[:] = [d for d in directories if d == 'theme']
         if relative.as_posix() == 'presentation/.build':
