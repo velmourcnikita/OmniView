@@ -18,7 +18,8 @@ const server=http.createServer((req,res)=>{
   await page.locator('.lesson-example select').selectOption('Ученик 2');await page.locator('.example-answers button').nth(2).click();
   await page.getByRole('button',{name:'Завершить приём',exact:true}).click();assert((await page.locator('.lesson-example').textContent()).includes('Верно: 1'));
   await page.goto(`http://127.0.0.1:${server.address().port}/`,{waitUntil:'networkidle'});
-  assert(await page.locator('.vp-doc img').evaluate(e=>e.complete&&e.naturalWidth>0));
+  assert(await page.locator('.vp-doc img[alt="Задания и результаты в OmniView"]').evaluate(e=>e.complete&&e.naturalWidth>0));
+  assert.equal(await page.locator('a[href="https://github.com/velmourcnikita/OmniView/actions/workflows/verify.yml"]').count(),1);
   const text=await page.locator('body').innerText();for(const word of ['Rust','WebView2','Google Sans','LIVE DEMO'])assert(!text.includes(word),'Technology label on homepage: '+word);
   assert(text.includes('OmniCONTROL'));assert.deepEqual(errors,[]);
   for(const width of [1365,390]){await page.setViewportSize({width,height:1000});assert(!await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth));}
