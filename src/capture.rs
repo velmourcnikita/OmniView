@@ -5,6 +5,15 @@ use windows_sys::Win32::{
 };
 /// Captures the primary display only after the local user enables sharing.
 pub fn screen(width: u32) -> Result<String, String> {
+    screen_with_quality(width, 55).map(|frame| frame.data)
+}
+pub struct Captured {
+    pub data: String,
+    pub quality: u8,
+    pub resized: bool,
+}
+pub fn screen_with_quality(width: u32, quality: u8) -> Result<Captured, String> {
+    let width = width.clamp(1, 1920);
     unsafe {
         let sw = GetSystemMetrics(SM_CXSCREEN);
         let sh = GetSystemMetrics(SM_CYSCREEN);
@@ -12,7 +21,7 @@ pub fn screen(width: u32) -> Result<String, String> {
             return Err("Экран недоступен".into());
         }
         let longest = sw.max(sh);
-        let scale = (width.clamp(1, 1280) as f64 / longest as f64).min(1.0);
+        let scale = (width.clamp(1, 1920) as f64 / longest as f64).min(1.0);
         let w = (sw as f64 * scale).round().max(1.0) as i32;
         let h = (sh as f64 * scale).round().max(1.0) as i32;
         let screen = GetDC(std::ptr::null_mut());
@@ -69,15 +78,32 @@ pub fn screen(width: u32) -> Result<String, String> {
             pixels[i * 3..i * 3 + 3].copy_from_slice(&rgb);
         }
         pixels.truncate((w * h * 3) as usize);
-        for quality in [55, 35, 20, 10, 1] {
+        let quality = quality.clamp(1, 90);
+        let mut qualities = vec![quality];
+        qualities.extend([55, 35].into_iter().filter(|q| *q < quality));
+        for quality in qualities {
             let mut jpeg = Vec::new();
             image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, quality)
                 .encode(&pixels, w as u32, h as u32, image::ExtendedColorType::Rgb8)
                 .map_err(|e| e.to_string())?;
             if jpeg.len() <= 225_000 {
-                return Ok(STANDARD.encode(jpeg));
+                return Ok(Captured {
+                    data: STANDARD.encode(jpeg),
+                    quality,
+                    resized: false,
+                });
             }
         }
-        Err("Не удалось уменьшить снимок до допустимого размера".into())
+        // Preserve legible text instead of crushing a full-size image to JPEG quality 1.
+        // Release the pixel buffer before retrying a smaller GDI capture, including on x86.
+        drop(pixels);
+        if width > 640 {
+            screen_with_quality((width * 3 / 4).max(640), quality).map(|mut frame| {
+                frame.resized = true;
+                frame
+            })
+        } else {
+            Err("Не удалось уменьшить снимок до допустимого размера".into())
+        }
     }
 }

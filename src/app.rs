@@ -30,6 +30,7 @@ pub struct Preferences {
     pub class_name: String,
     pub host: String,
     pub low: bool,
+    pub auto_quality: bool,
     pub theme: String,
     pub animations: bool,
     pub notification_seconds: u64,
@@ -43,6 +44,7 @@ impl Default for Preferences {
             class_name: "Компьютерный класс".into(),
             host: classroom::host_ip(),
             low: true,
+            auto_quality: true,
             theme: "dark".into(),
             animations: true,
             notification_seconds: 9,
@@ -117,9 +119,9 @@ impl Core {
         let notice = self.notice.lock().unwrap();
         let t=teacher.as_ref().map(|t|{
    let peers=t.list().into_iter().map(|p|json!({"id":p.id,"name":p.name,"machine":p.machine,"online":p.online,"help":p.help,"sharing":p.sharing,"monitoring":p.monitoring,"monitor_error":p.monitor_error,"control":p.control,"last_seen":p.last_seen,"frame":p.frame.map(|f|json!({"seq":f.seq}))})).collect::<Vec<_>>();
-   json!({"active":!t.stop.load(Ordering::Relaxed),"invite":*self.protected_invite.lock().unwrap(),"address":format!("{}:{}",t.invite.host,t.invite.port),"peers":peers,"log":*t.log.lock().unwrap(),"broadcasting":t.broadcasting.load(Ordering::Relaxed),"lesson":*t.lesson.lock().unwrap(),"assessment":*t.assessment.lock().unwrap()})
+   json!({"active":!t.stop.load(Ordering::Relaxed),"invite":*self.protected_invite.lock().unwrap(),"address":format!("{}:{}",t.invite.host,t.invite.port),"peers":peers,"log":*t.log.lock().unwrap(),"broadcasting":t.broadcasting.load(Ordering::Relaxed),"video_quality":*t.video_quality.lock().unwrap(),"lesson":*t.lesson.lock().unwrap(),"assessment":*t.assessment.lock().unwrap()})
   });
-        let s=student.as_ref().map(|s|{let st=s.state.lock().unwrap();json!({"connected":st.connected,"connecting":st.connecting,"status":st.status,"sharing":st.sharing,"help":st.help,"messages":st.messages,"broadcasting":st.broadcasting,"broadcast":st.broadcast.as_ref().map(|f|json!({"seq":f.seq})),"question":st.question,"answer_pending":st.answer.is_some(),"policy":st.policy,"monitoring":st.monitoring,"detections":st.detections,"monitor_error":st.monitor_error,"control_request":st.control_request,"control_active":st.control_active,"control_pending":st.control_grant.is_some(),"control_error":st.control_error})});
+        let s=student.as_ref().map(|s|{let st=s.state.lock().unwrap();json!({"connected":st.connected,"connecting":st.connecting,"status":st.status,"sharing":st.sharing,"video_quality":st.video_quality,"help":st.help,"messages":st.messages,"broadcasting":st.broadcasting,"broadcast":st.broadcast.as_ref().map(|f|json!({"seq":f.seq})),"question":st.question,"answer_pending":st.answer.is_some(),"policy":st.policy,"monitoring":st.monitoring,"detections":st.detections,"monitor_error":st.monitor_error,"control_request":st.control_request,"control_active":st.control_active,"control_pending":st.control_grant.is_some(),"control_error":st.control_error})});
         json!({"updates":crate::updates::summary(&self.updates),"portable":std::env::current_exe().ok().and_then(|p|p.parent().map(|p|p.join("portable.flag").is_file())).unwrap_or(false),"version":env!("CARGO_PKG_VERSION"),"arch":std::env::consts::ARCH,"role":if self.student_role.load(Ordering::Relaxed){"student"}else{"teacher"},"prefs":*self.prefs.lock().unwrap(),"teacher":t,"student":s,"notice":{"id":notice.0,"text":notice.1},"export_file":*self.export_file.lock().unwrap()})
     }
     pub fn image(&self, url: &str) -> Option<Vec<u8>> {
@@ -256,9 +258,11 @@ impl Core {
                 save_preferences(&prefs)?;
                 if let Some(t) = self.teacher.lock().unwrap().as_ref() {
                     t.low.store(prefs.low, Ordering::Relaxed);
+                    t.auto_quality.store(prefs.auto_quality, Ordering::Relaxed);
                 }
                 if let Some(s) = self.student.lock().unwrap().as_ref() {
                     s.low.store(prefs.low, Ordering::Relaxed);
+                    s.auto_quality.store(prefs.auto_quality, Ordering::Relaxed);
                 }
                 *self.prefs.lock().unwrap() = prefs;
                 self.feedback("Настройки сохранены");
@@ -290,6 +294,7 @@ impl Core {
                 }
                 let prefs = self.prefs.lock().unwrap().clone();
                 let t = Teacher::start(prefs.host, prefs.low, self.changed())?;
+                t.auto_quality.store(prefs.auto_quality, Ordering::Relaxed);
                 match t.invite.encrypt(&password) {
                     Ok(code) => *self.protected_invite.lock().unwrap() = code,
                     Err(e) => {
@@ -368,6 +373,10 @@ impl Core {
                     self.prefs.lock().unwrap().low,
                     self.changed(),
                 )?);
+                if let Some(s) = student.as_ref() {
+                    s.auto_quality
+                        .store(self.prefs.lock().unwrap().auto_quality, Ordering::Relaxed);
+                }
                 self.feedback("Подключение к классу…");
             }
             "leave" => {
@@ -581,8 +590,10 @@ mod tests {
         assert!(old.animations);
         assert_eq!(old.notification_seconds, 9);
         assert!(!old.low);
+        assert!(old.auto_quality);
         assert_eq!(old.name, "Учитель");
         let disabled = Preferences {
+            auto_quality: false,
             animations: false,
             notification_seconds: 20,
             ..old
@@ -590,6 +601,7 @@ mod tests {
         let saved = serde_json::to_vec(&disabled).unwrap();
         let restored: Preferences = serde_json::from_slice(&saved).unwrap();
         assert!(!restored.animations);
+        assert!(!restored.auto_quality);
         assert_eq!(restored.notification_seconds, 20);
     }
 }

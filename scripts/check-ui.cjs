@@ -16,7 +16,7 @@ const server=http.createServer((req,res)=>{
   res.setHeader('Content-Type',types[path.extname(file)]);res.end(fs.readFileSync(path.join(root,file)));
 });
 const prefs={name:'Преподаватель',class_name:'Компьютерный класс',host:'127.0.0.1',low:true,theme:'dark',animations:true};
-const empty={version:'0.5.1',arch:'x86',role:'teacher',prefs,teacher:null,student:null,notice:{id:0,text:''},export_file:''};
+const empty={version:'0.6.1',arch:'x86',role:'teacher',prefs,teacher:null,student:null,notice:{id:0,text:''},export_file:''};
 (async()=>{
   fs.mkdirSync(out,{recursive:true});
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
@@ -99,6 +99,11 @@ const empty={version:'0.5.1',arch:'x86',role:'teacher',prefs,teacher:null,studen
     assert.equal(await page.evaluate(()=>window.sent.at(-1).action),'download_update');
     await page.evaluate(s=>window.receiveState(s),{...updateOffer,updates:{...updateOffer.updates,status:{...updateOffer.updates.status,prepared:true}}});
     assert(await page.locator('#installUpdate').isDisabled(),'Update must not interrupt a live class');
+    assert(await page.locator('[name="auto_quality"]').isChecked());
+    assert(await page.locator('[name="low"]').isDisabled());
+    await page.locator('.setting-row:has([name="auto_quality"])').screenshot({path:path.join(out,'auto-quality.png')});
+    await page.locator('[name="auto_quality"]').uncheck();
+    assert(await page.locator('[name="low"]').isEnabled());
     await page.locator('[name="name"]').fill('Учитель');
     await page.locator('[name="animations"]').uncheck();
     await page.locator('[name="notification_seconds"]').fill('20');
@@ -106,6 +111,9 @@ const empty={version:'0.5.1',arch:'x86',role:'teacher',prefs,teacher:null,studen
     assert.equal(await page.evaluate(()=>window.sent.at(-1).prefs.name),'Учитель');
     assert.equal(await page.evaluate(()=>window.sent.at(-1).prefs.animations),false);
     assert.equal(await page.evaluate(()=>window.sent.at(-1).prefs.notification_seconds),20);
+    assert.equal(await page.evaluate(()=>window.sent.at(-1).prefs.auto_quality),false);
+    await page.evaluate(s=>window.receiveState(s),{...active,teacher:{...active.teacher,broadcasting:true,video_quality:{mode:'auto',width:1600,interval_ms:350,reason:'Соединение работает стабильно'}}});
+    assert((await page.locator('#qualityHint').textContent()).includes('1600 px'));
     assert.equal(await page.locator('[name="notification_seconds"]').getAttribute('min'),'5');
     const disabled={...active,prefs:{...prefs,animations:false}};
     await page.evaluate(s=>window.receiveState(s),disabled);

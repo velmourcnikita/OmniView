@@ -10,6 +10,7 @@ mod invitation;
 mod lesson;
 mod notifications;
 mod updates;
+mod video_quality;
 use std::{borrow::Cow, sync::Arc, time::Duration};
 use tao::{
     event::{Event, WindowEvent},

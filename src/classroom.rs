@@ -135,6 +135,8 @@ pub struct Poll {
     pub monitor_error: Option<String>,
     #[serde(default)]
     pub control_grant: Option<String>,
+    #[serde(default)]
+    pub video_feedback: Option<crate::video_quality::Feedback>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Update {
@@ -232,6 +234,8 @@ pub struct Peer {
     queue: VecDeque<Message>,
     #[serde(skip)]
     ack: bool,
+    #[serde(skip)]
+    video_link: Option<(Instant, crate::video_quality::Link)>,
 }
 pub struct Teacher {
     pub assessment: Mutex<crate::assessment::Assessment>,
@@ -243,6 +247,8 @@ pub struct Teacher {
     pub broadcasting: AtomicBool,
     pub broadcast: Mutex<Option<Frame>>,
     pub low: AtomicBool,
+    pub auto_quality: AtomicBool,
+    pub video_quality: Mutex<crate::video_quality::Status>,
     pub changed: Changed,
     connections: AtomicUsize,
 }
@@ -278,6 +284,8 @@ impl Teacher {
             broadcasting: AtomicBool::new(false),
             broadcast: Mutex::new(None),
             low: AtomicBool::new(low),
+            auto_quality: AtomicBool::new(true),
+            video_quality: Mutex::new(crate::video_quality::Status::default()),
             changed,
             connections: AtomicUsize::new(0),
         });
@@ -308,23 +316,63 @@ impl Teacher {
         let capture_t = t.clone();
         std::thread::spawn(move || {
             let mut last = Instant::now() - Duration::from_secs(10);
+            let mut quality = crate::video_quality::Controller::new();
+            let mut hardware = crate::video_quality::Sampler::new();
             while !capture_t.stop.load(Ordering::Relaxed) {
                 if capture_t.broadcasting.load(Ordering::Relaxed)
-                    && !capture_t.peers.lock().unwrap().is_empty()
+                    && capture_t.peers.lock().unwrap().values().any(|p| {
+                        p.online
+                            && p.last
+                                .is_some_and(|at| at.elapsed() < Duration::from_secs(6))
+                    })
                 {
                     let low = capture_t.low.load(Ordering::Relaxed);
-                    if last.elapsed() >= Duration::from_millis(if low { 5000 } else { 250 }) {
-                        if let Ok(data) = crate::capture::screen(if low { 640 } else { 1280 }) {
-                            let mut frame = capture_t.broadcast.lock().unwrap();
-                            if capture_t.broadcasting.load(Ordering::Relaxed) {
-                                *frame = Some(Frame {
-                                    seq: now(),
-                                    data: data.into(),
-                                });
-                            }
-                            (capture_t.changed)();
-                        }
+                    let auto = capture_t.auto_quality.load(Ordering::Relaxed);
+                    let link = {
+                        let peers = capture_t.peers.lock().unwrap();
+                        crate::video_quality::Link::worst(
+                            peers
+                                .values()
+                                .filter(|p| {
+                                    p.online
+                                        && p.last
+                                            .is_some_and(|l| l.elapsed() < Duration::from_secs(6))
+                                })
+                                .filter_map(|p| {
+                                    p.video_link
+                                        .filter(|(at, _)| at.elapsed() < Duration::from_secs(6))
+                                        .map(|(_, link)| link)
+                                }),
+                        )
+                    };
+                    let plan = quality.plan(Instant::now(), auto, low, hardware.sample(), link);
+                    if last.elapsed() >= Duration::from_millis(plan.interval_ms) {
                         last = Instant::now();
+                        let began = Instant::now();
+                        match crate::capture::screen_with_quality(plan.width, plan.quality) {
+                            Ok(captured) => {
+                                quality.capture(
+                                    began.elapsed(),
+                                    captured.quality.saturating_add(15) < plan.quality
+                                        || captured.resized,
+                                );
+                                let mut frame = capture_t.broadcast.lock().unwrap();
+                                if capture_t.broadcasting.load(Ordering::Relaxed) {
+                                    *frame = Some(Frame {
+                                        seq: now(),
+                                        data: captured.data.into(),
+                                    });
+                                }
+                                drop(frame);
+                                *capture_t.video_quality.lock().unwrap() = quality.status();
+                                (capture_t.changed)();
+                            }
+                            Err(e) => {
+                                quality.failed(e);
+                                *capture_t.video_quality.lock().unwrap() = quality.status();
+                                (capture_t.changed)();
+                            }
+                        }
                     }
                 }
                 std::thread::sleep(Duration::from_millis(50));
@@ -394,7 +442,15 @@ impl Teacher {
                 owner: owner.clone(),
                 queue: VecDeque::new(),
                 ack: false,
+                video_link: None,
             });
+            let reported = poll
+                .video_feedback
+                .as_ref()
+                .filter(|feedback| feedback.seq != 0 && feedback.seq == last_broadcast);
+            if let Some(feedback) = reported {
+                p.video_link = Some((Instant::now(), feedback.link()));
+            }
             p.owner = owner.clone();
             p.monitoring = poll.monitoring;
             p.monitor_error = poll.monitor_error.as_deref().map(|s| clean(s, 120));
@@ -457,6 +513,8 @@ impl Teacher {
             if let Some(f) = &broadcast {
                 last_broadcast = f.seq;
             }
+            let has_broadcast = broadcast.is_some();
+            let began = Instant::now();
             if write_packet(
                 &mut stream,
                 &Update {
@@ -476,6 +534,24 @@ impl Teacher {
             .is_err()
             {
                 break;
+            }
+            // Older clients have no feedback field. Socket backpressure is a fallback.
+            if has_broadcast && reported.is_none() {
+                if let Some(p) = self.peers.lock().unwrap().get_mut(&bound) {
+                    if p.owner == owner
+                        && p.video_link
+                            .is_none_or(|(at, _)| at.elapsed() > Duration::from_secs(3))
+                    {
+                        p.video_link = Some((
+                            Instant::now(),
+                            crate::video_quality::Link {
+                                transfer_ms: began.elapsed().as_millis().clamp(1, 7000) as u32,
+                                cpu: None,
+                                memory: None,
+                            },
+                        ));
+                    }
+                }
             }
             (self.changed)();
         }
@@ -593,6 +669,7 @@ impl Teacher {
 }
 #[derive(Clone, Serialize)]
 pub struct StudentState {
+    pub video_quality: crate::video_quality::Status,
     pub control_request: Option<crate::control::Request>,
     pub control_grant: Option<String>,
     pub control_active: bool,
@@ -618,6 +695,7 @@ pub struct Student {
     pub state: Mutex<StudentState>,
     pub stop: AtomicBool,
     pub low: AtomicBool,
+    pub auto_quality: AtomicBool,
     changed: Changed,
 }
 impl Student {
@@ -638,6 +716,7 @@ impl Student {
         let s = Arc::new(Self {
             input: crate::control::InputGate::default(),
             state: Mutex::new(StudentState {
+                video_quality: crate::video_quality::Status::default(),
                 control_request: None,
                 control_grant: None,
                 control_active: false,
@@ -660,6 +739,7 @@ impl Student {
             }),
             stop: AtomicBool::new(false),
             low: AtomicBool::new(low),
+            auto_quality: AtomicBool::new(true),
             changed,
         });
         let student = s.clone();
@@ -683,6 +763,10 @@ impl Student {
                 let mut stream = tls_client(&invite, config)?;
                 let mut last = Instant::now() - Duration::from_secs(10);
                 let mut last_scan = Instant::now() - Duration::from_secs(10);
+                let mut quality = crate::video_quality::Controller::new();
+                let mut hardware = crate::video_quality::Sampler::new();
+                let mut link: Option<(Instant, crate::video_quality::Link)> = None;
+                let mut feedback = None;
                 while !student.stop.load(Ordering::Relaxed) {
                     let policy = {
                         let st = student.state.lock().unwrap();
@@ -710,17 +794,40 @@ impl Student {
                     let share = student.state.lock().unwrap().sharing;
                     let low = student.low.load(Ordering::Relaxed)
                         && student.state.lock().unwrap().control_grant.is_none();
-                    let frame = if share
-                        && last.elapsed() >= Duration::from_millis(if low { 5000 } else { 250 })
-                    {
-                        last = Instant::now();
-                        Some(Frame {
-                            seq: now(),
-                            data: crate::capture::screen(if low { 640 } else { 1280 })?.into(),
-                        })
-                    } else {
-                        None
-                    };
+                    let auto = student.auto_quality.load(Ordering::Relaxed);
+                    let load = hardware.sample();
+                    let plan = quality.plan(
+                        Instant::now(),
+                        auto,
+                        low,
+                        load,
+                        link.filter(|(at, _)| at.elapsed() < Duration::from_secs(8))
+                            .map(|(_, sample)| sample),
+                    );
+                    let frame =
+                        if share && last.elapsed() >= Duration::from_millis(plan.interval_ms) {
+                            last = Instant::now();
+                            let began = Instant::now();
+                            match crate::capture::screen_with_quality(plan.width, plan.quality) {
+                                Ok(captured) => {
+                                    quality.capture(
+                                        began.elapsed(),
+                                        captured.quality.saturating_add(15) < plan.quality
+                                            || captured.resized,
+                                    );
+                                    Some(Frame {
+                                        seq: now(),
+                                        data: captured.data.into(),
+                                    })
+                                }
+                                Err(e) => {
+                                    quality.failed(e);
+                                    None
+                                }
+                            }
+                        } else {
+                            None
+                        };
                     let (share, help, note) = {
                         let st = student.state.lock().unwrap();
                         (st.sharing, st.help, st.note.clone())
@@ -754,7 +861,10 @@ impl Student {
                         detections,
                         monitor_error,
                         control_grant,
+                        video_feedback: feedback.take(),
                     };
+                    let uploaded = poll.frame.is_some();
+                    let began = Instant::now();
                     write_packet(&mut stream, &poll)?;
                     let u: Update = read_packet(&mut stream)?;
                     if !u.ok {
@@ -763,8 +873,25 @@ impl Student {
                     if student.stop.load(Ordering::Relaxed) {
                         break;
                     }
+                    if uploaded || u.broadcast.is_some() {
+                        let measured = crate::video_quality::Link {
+                            transfer_ms: began.elapsed().as_millis().clamp(1, 7000) as u32,
+                            cpu: None,
+                            memory: None,
+                        };
+                        link = Some((Instant::now(), measured));
+                        if let Some(frame) = &u.broadcast {
+                            feedback = Some(crate::video_quality::Feedback {
+                                seq: frame.seq,
+                                transfer_ms: measured.transfer_ms,
+                                cpu: load.cpu,
+                                memory: load.memory,
+                            });
+                        }
+                    }
                     {
                         let mut st = student.state.lock().unwrap();
+                        st.video_quality = quality.status();
                         let request_id = u.control_request.as_ref().map(|r| r.id.as_str());
                         if st.control_grant.as_deref() != request_id {
                             st.control_grant = None;
@@ -844,7 +971,7 @@ impl Student {
                         }
                     }
                     (student.changed)();
-                    for _ in 0..if low { 10 } else { 2 } {
+                    for _ in 0..if low && !auto { 10 } else { 2 } {
                         if student.stop.load(Ordering::Relaxed) {
                             break;
                         }
@@ -1105,6 +1232,15 @@ pub fn worker_self_test() -> Result<(), String> {
         wait("показ экрана учителя", || {
             s.state.lock().unwrap().broadcast.is_some()
         })?;
+        wait(
+            "обратная связь о доставке кадра",
+            || {
+                t.peers.lock().unwrap().values().any(|peer| {
+                    peer.video_link
+                        .is_some_and(|(_, link)| link.memory.is_some())
+                })
+            },
+        )?;
         t.set_broadcast(false);
         wait("отключение показа учителя", || {
             let st = s.state.lock().unwrap();
@@ -1141,6 +1277,7 @@ pub fn network_self_test() -> Result<(), String> {
             detections: vec![],
             monitor_error: None,
             control_grant: None,
+            video_feedback: None,
         };
         write_packet(&mut s, &p).map_err(|e| format!("First write: {e}"))?;
         let u: Update = read_packet(&mut s).map_err(|e| format!("First read: {e}"))?;
