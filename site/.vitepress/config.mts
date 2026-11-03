@@ -21,7 +21,7 @@ export default defineConfig({
       { text: 'Обзор', items: [{ text: 'Главная', link: '/' }, { text: 'Пример урока', link: '/demo' }] },
       { text: 'Работа', items: [{ text: 'Возможности', link: '/features' }, { text: 'Быстрый старт', link: '/quick-start' }] },
       { text: 'Для разработчика', items: [{ text: 'Архитектура', link: '/architecture' }, { text: 'Сборка и тесты', link: '/development' }] },
-      { text: 'Релизы', items: [{ text: 'Скачать', link: '/download' }, { text: 'Обновления', link: '/updates' }, { text: 'Legacy: старые Windows', link: '/legacy' }] }
+      { text: 'Релизы', items: [{ text: 'Скачать', link: '/download' }, { text: 'Обновления', link: '/updates' }, { text: 'Legacy: другие системы', link: '/legacy' }] }
     ],
     footer: { message: 'OmniView · локальный компьютерный класс', copyright: 'OmniView — подразделение OmniCONTROL' },
     search: { provider: 'local' }

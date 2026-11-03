@@ -1,6 +1,6 @@
 # Скачать
 
-Готовые файлы программы — в [релизах GitHub](https://github.com/velmourcnikita/OmniView/releases). Для старых Windows открой [Legacy](/legacy).
+Готовые файлы программы — в [релизах GitHub](https://github.com/velmourcnikita/OmniView/releases). Для старых Windows, Linux и macOS открой [Legacy](/legacy).
 
 Скачай все три файла своей архитектуры: EXE учителя, EXE ученика и DLL. Убери префикс `win64-` или `win32-` у имён файлов, затем положи их в одну папку. В дальнейшем программа обновляет комплект сама. Полные ZIP-архивы, презентации и конкурсные документы в релизы не входят.
 
