@@ -23,6 +23,12 @@ const server=http.createServer((req,res)=>{
   const text=await page.locator('body').innerText();for(const word of ['Rust','WebView2','Google Sans','LIVE DEMO'])assert(!text.includes(word),'Technology label on homepage: '+word);
   assert(text.includes('OmniCONTROL'));assert.deepEqual(errors,[]);
   for(const width of [1365,390]){await page.setViewportSize({width,height:1000});assert(!await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth));}
+  await page.goto(`http://127.0.0.1:${server.address().port}/legacy`,{waitUntil:'networkidle'});
+  assert((await page.locator('body').innerText()).includes('ProcessPrng'));
+  assert(await page.locator('a[href="https://github.com/velmourcnikita/omniview-legacy"]').count()>0);
+  await page.goto(`http://127.0.0.1:${server.address().port}/updates`,{waitUntil:'networkidle'});
+  assert((await page.locator('body').innerText()).includes('preview'));
+  assert.deepEqual(errors,[]);
   fs.mkdirSync(path.resolve(__dirname,'../verification/site'),{recursive:true});await page.screenshot({path:path.resolve(__dirname,'../verification/site/mobile.png'),fullPage:true});
   console.log('Site checks passed: SSR, example, image, branding, homepage text, desktop/mobile width');
  }finally{await browser.close();server.close();}

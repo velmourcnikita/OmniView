@@ -1,5 +1,9 @@
 use std::{env, path::PathBuf, process::Command};
 fn main() {
+    println!("cargo:rerun-if-env-changed=OMNIVIEW_BUILD_COMMIT");
+    if let Ok(commit) = env::var("OMNIVIEW_BUILD_COMMIT") {
+        println!("cargo:rustc-env=OMNIVIEW_BUILD_COMMIT={commit}");
+    }
     println!("cargo:rerun-if-changed=assets/omniview.rc");
     let target = env::var("TARGET").unwrap();
     if !target.contains("windows") {

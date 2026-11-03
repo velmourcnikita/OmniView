@@ -11,6 +11,13 @@ use std::{
 };
 
 pub fn data_dir() -> PathBuf {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            if dir.join("portable.flag").is_file() {
+                return dir.join("data");
+            }
+        }
+    }
     std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir)
@@ -26,6 +33,8 @@ pub struct Preferences {
     pub theme: String,
     pub animations: bool,
     pub notification_seconds: u64,
+    pub auto_updates: bool,
+    pub preview_updates: bool,
 }
 impl Default for Preferences {
     fn default() -> Self {
@@ -37,6 +46,8 @@ impl Default for Preferences {
             theme: "dark".into(),
             animations: true,
             notification_seconds: 9,
+            auto_updates: true,
+            preview_updates: false,
         }
     }
 }
@@ -52,6 +63,7 @@ fn save_preferences(prefs: &Preferences) -> Result<(), String> {
     std::fs::rename(tmp, path).map_err(|e| e.to_string())
 }
 pub struct Core {
+    pub updates: crate::updates::Updates,
     prefs: Mutex<Preferences>,
     student_role: AtomicBool,
     teacher: Mutex<Option<Arc<Teacher>>>,
@@ -69,6 +81,7 @@ impl Core {
             .unwrap_or_default();
         prefs.notification_seconds = prefs.notification_seconds.clamp(5, 60);
         Self {
+            updates: crate::updates::Updates::new(),
             prefs: Mutex::new(prefs),
             student_role: AtomicBool::new(student),
             teacher: Mutex::new(None),
@@ -107,7 +120,7 @@ impl Core {
    json!({"active":!t.stop.load(Ordering::Relaxed),"invite":*self.protected_invite.lock().unwrap(),"address":format!("{}:{}",t.invite.host,t.invite.port),"peers":peers,"log":*t.log.lock().unwrap(),"broadcasting":t.broadcasting.load(Ordering::Relaxed),"lesson":*t.lesson.lock().unwrap(),"assessment":*t.assessment.lock().unwrap()})
   });
         let s=student.as_ref().map(|s|{let st=s.state.lock().unwrap();json!({"connected":st.connected,"connecting":st.connecting,"status":st.status,"sharing":st.sharing,"help":st.help,"messages":st.messages,"broadcasting":st.broadcasting,"broadcast":st.broadcast.as_ref().map(|f|json!({"seq":f.seq})),"question":st.question,"answer_pending":st.answer.is_some(),"policy":st.policy,"monitoring":st.monitoring,"detections":st.detections,"monitor_error":st.monitor_error,"control_request":st.control_request,"control_active":st.control_active,"control_pending":st.control_grant.is_some(),"control_error":st.control_error})});
-        json!({"version":env!("CARGO_PKG_VERSION"),"arch":std::env::consts::ARCH,"role":if self.student_role.load(Ordering::Relaxed){"student"}else{"teacher"},"prefs":*self.prefs.lock().unwrap(),"teacher":t,"student":s,"notice":{"id":notice.0,"text":notice.1},"export_file":*self.export_file.lock().unwrap()})
+        json!({"updates":crate::updates::summary(&self.updates),"portable":std::env::current_exe().ok().and_then(|p|p.parent().map(|p|p.join("portable.flag").is_file())).unwrap_or(false),"version":env!("CARGO_PKG_VERSION"),"arch":std::env::consts::ARCH,"role":if self.student_role.load(Ordering::Relaxed){"student"}else{"teacher"},"prefs":*self.prefs.lock().unwrap(),"teacher":t,"student":s,"notice":{"id":notice.0,"text":notice.1},"export_file":*self.export_file.lock().unwrap()})
     }
     pub fn image(&self, url: &str) -> Option<Vec<u8>> {
         let parts: Vec<_> = url.split('/').collect();
@@ -146,6 +159,28 @@ impl Core {
                 .ok_or_else(|| format!("Отсутствует поле {key}"))
         };
         match action {
+            "check_updates" => {
+                let preview = self.prefs.lock().unwrap().preview_updates;
+                let result = self.updates.check(preview);
+                self.rev.fetch_add(1, Ordering::Relaxed);
+                result?;
+            }
+            "download_update" => {
+                let result = self.updates.prepare();
+                self.rev.fetch_add(1, Ordering::Relaxed);
+                result?;
+            }
+            "install_update" => {
+                if self.teacher.lock().unwrap().is_some()
+                    || self.student.lock().unwrap().as_ref().is_some_and(|s| {
+                        let st = s.state.lock().unwrap();
+                        st.connected || st.connecting
+                    })
+                {
+                    return Err("Сначала заверши класс и выйди из подключения".into());
+                }
+                self.updates.launch()?;
+            }
             "control_request" => {
                 let on = value["on"].as_bool().ok_or("Укажи состояние управления")?;
                 self.teacher

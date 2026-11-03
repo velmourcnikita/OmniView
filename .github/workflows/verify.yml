@@ -45,6 +45,8 @@ jobs:
           cargo test --locked --target ${{ matrix.target }}
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build and package
+        env:
+          OMNIVIEW_BUILD_COMMIT: ${{ github.sha }}
         run: ./scripts/package.ps1 -Architecture ${{ matrix.arch }} -RustTarget ${{ matrix.target }}
       - name: Verify hashes and metadata
         run: ./scripts/verify-release.ps1 -Directory $(if ('${{ matrix.arch }}' -eq 'x86') {'dist/win32'} else {'dist'})
@@ -52,11 +54,21 @@ jobs:
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
-          subject-path: dist/OmniView-*-win*.zip
+          subject-path: |
+            dist/**/OmniView*.exe
+            dist/**/WebView2Loader.dll
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: OmniView-${{ matrix.arch }}
           path: dist/OmniView-*-win*.zip
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: update-${{ matrix.arch }}
+          path: |
+            ${{ matrix.arch == 'x86' && 'dist/win32' || 'dist' }}/OmniView.exe
+            ${{ matrix.arch == 'x86' && 'dist/win32' || 'dist' }}/OmniView-Student.exe
+            ${{ matrix.arch == 'x86' && 'dist/win32' || 'dist' }}/WebView2Loader.dll
           if-no-files-found: error
   site:
     runs-on: ubuntu-latest
@@ -81,14 +93,21 @@ jobs:
           path: site/.vitepress/dist
   release:
     needs: [windows, site]
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
+    concurrency:
+      group: publish-application
+      cancel-in-progress: false
     permissions:
       contents: write
     steps:
-      - name: Draft release
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: update-*
+          path: publish
+      - name: Publish application files
         env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.ref_name }}
-        run: gh release create "$RELEASE_TAG" --verify-tag --draft --generate-notes
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'preview' }}
+        run: python scripts/publish-build.py

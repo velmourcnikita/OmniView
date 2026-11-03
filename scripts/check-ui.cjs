@@ -91,6 +91,14 @@ const empty={version:'0.5.1',arch:'x86',role:'teacher',prefs,teacher:null,studen
     assert.deepEqual(await page.evaluate(()=>window.sent.at(-1)),{action:'send_message',target:'all',text:'Привет классу 😀'});
     await page.locator('[data-close="messageDialog"]').click();
     await page.locator('[data-view="settings"]').click();
+    await page.locator('#checkUpdates').click();
+    assert.equal(await page.evaluate(()=>window.sent.at(-1).action),'check_updates');
+    const updateOffer={...active,updates:{build_commit:'local',status:{available:true,busy:false,prepared:false,version:'v0.6.1',message:'Доступна новая сборка',commit:'abcdef1234567890',commit_title:'Test build'}}};
+    await page.evaluate(s=>window.receiveState(s),updateOffer);
+    await page.locator('#downloadUpdate').click();
+    assert.equal(await page.evaluate(()=>window.sent.at(-1).action),'download_update');
+    await page.evaluate(s=>window.receiveState(s),{...updateOffer,updates:{...updateOffer.updates,status:{...updateOffer.updates.status,prepared:true}}});
+    assert(await page.locator('#installUpdate').isDisabled(),'Update must not interrupt a live class');
     await page.locator('[name="name"]').fill('Учитель');
     await page.locator('[name="animations"]').uncheck();
     await page.locator('[name="notification_seconds"]').fill('20');

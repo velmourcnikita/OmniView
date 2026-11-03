@@ -3,11 +3,13 @@ mod app;
 mod assessment;
 mod capture;
 mod classroom;
+mod compatibility;
 mod control;
 mod control_test;
 mod invitation;
 mod lesson;
 mod notifications;
+mod updates;
 use std::{borrow::Cow, sync::Arc, time::Duration};
 use tao::{
     event::{Event, WindowEvent},
@@ -24,6 +26,29 @@ enum UiEvent {
     Tick,
 }
 fn main() {
+    let args: Vec<_> = std::env::args_os().collect();
+    if args.get(1).is_some_and(|s| s == "--apply-update") {
+        if let Some(path) = args.get(2) {
+            if let Err(e) = updates::apply(std::path::Path::new(path)) {
+                let _ = std::fs::write(app::data_dir().join("update-error.txt"), &e);
+                unsafe {
+                    use windows_sys::Win32::UI::WindowsAndMessaging::*;
+                    let text: Vec<u16> = e.encode_utf16().chain(Some(0)).collect();
+                    let title: Vec<u16> = "OmniView — обновление"
+                        .encode_utf16()
+                        .chain(Some(0))
+                        .collect();
+                    MessageBoxW(
+                        std::ptr::null_mut(),
+                        text.as_ptr(),
+                        title.as_ptr(),
+                        MB_ICONERROR,
+                    );
+                }
+            }
+        }
+        return;
+    }
     let _ = rustls::crypto::ring::default_provider().install_default();
     if std::env::args().any(|a| a == "--control-test") {
         if let Err(e) = control_test::run() {
@@ -44,6 +69,27 @@ fn main() {
             );
         }
         return;
+    }
+    let commands: Vec<_> = std::env::args().collect();
+    if commands
+        .get(1)
+        .is_some_and(|a| a == "--compat-server" || a == "--compat-client")
+    {
+        let result = commands
+            .get(2)
+            .ok_or("No test folder".to_string())
+            .and_then(|p| compatibility::run(&commands[1], std::path::Path::new(p)));
+        std::process::exit(if result.is_ok() { 0 } else { 1 });
+    }
+    if std::env::args().any(|a| a == "--update-check") {
+        let updates = updates::Updates::new();
+        let result = updates.check(std::env::args().any(|a| a == "--preview"));
+        let _ = std::fs::create_dir_all(app::data_dir());
+        let _ = std::fs::write(
+            app::data_dir().join("update-check.json"),
+            updates::summary(&updates).to_string(),
+        );
+        std::process::exit(if result.is_ok() { 0 } else { 1 });
     }
     if std::env::args().any(|a| a == "--self-test") {
         let result = app::self_test();
@@ -70,6 +116,12 @@ fn run() -> Result<(), String> {
             .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().to_lowercase()))
             .is_some_and(|s| s.contains("student"));
     let core = Arc::new(app::Core::new(student));
+    if !smoke && core.snapshot()["prefs"]["auto_updates"] == true {
+        let c = core.clone();
+        std::thread::spawn(move || {
+            let _ = c.handle(serde_json::json!({"action":"check_updates"}));
+        });
+    }
     let event_loop = EventLoopBuilder::<UiEvent>::with_user_event().build();
     let window = WindowBuilder::new()
         .with_visible(!smoke)
@@ -117,7 +169,7 @@ fn run() -> Result<(), String> {
   .with_background_color((15,21,18,255)).with_url("omniview://localhost/").build(&window).map_err(|e|e.to_string())?;
     let timer = event_loop.create_proxy();
     std::thread::spawn(move || loop {
-        std::thread::sleep(Duration::from_millis(100));
+        std::thread::sleep(Duration::from_millis(250));
         if timer.send_event(UiEvent::Tick).is_err() {
             break;
         }
@@ -132,7 +184,7 @@ fn run() -> Result<(), String> {
    Event::UserEvent(UiEvent::Ipc(raw))=>if let Ok(value)=serde_json::from_str::<serde_json::Value>(&raw){
     if smoke && value["action"]=="ui_smoke"{
      let _=std::fs::write(app::data_dir().join("ui-smoke.json"),value.to_string());core.stop();*flow=ControlFlow::Exit;
-    }else if value["action"]=="ready"{ready=true;last=0;}else if value["action"]=="control_input"{if let Err(e)=core.handle(value){core.feedback(&e);}}else{let core=core.clone();std::thread::spawn(move||{if let Err(e)=core.handle(value){core.feedback(&e);}});}
+    }else if value["action"]=="install_update"{match core.handle(value){Ok(())=>{core.stop();*flow=ControlFlow::Exit;},Err(e)=>core.feedback(&e)}}else if value["action"]=="ready"{ready=true;last=0;}else if value["action"]=="control_input"{if let Err(e)=core.handle(value){core.feedback(&e);}}else{let core=core.clone();std::thread::spawn(move||{if let Err(e)=core.handle(value){core.feedback(&e);}});}
    },
    Event::WindowEvent{window_id,event:WindowEvent::CloseRequested,..}=>{if window_id==notifications.window.id(){if notifications.assisting{let _=core.handle(serde_json::json!({"action":"control_consent","on":false}));}notifications.dismiss();}else{core.stop();*flow=ControlFlow::Exit;}},
    Event::WindowEvent{window_id,event:WindowEvent::MouseInput{state:tao::event::ElementState::Pressed,..},..} if window_id==notifications.window.id()=>{if notifications.assisting{let _=core.handle(serde_json::json!({"action":"control_consent","on":false}));}notifications.dismiss();},

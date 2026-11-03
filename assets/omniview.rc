@@ -1,7 +1,7 @@
 #pragma code_page(65001)
 1 VERSIONINFO
- FILEVERSION 0,5,1,0
- PRODUCTVERSION 0,5,1,0
+ FILEVERSION 0,6,0,0
+ PRODUCTVERSION 0,6,0,0
  FILEFLAGSMASK 0x3fL
  FILEFLAGS 0
  FILEOS 0x40004L
@@ -14,11 +14,11 @@ BEGIN
   BEGIN
    VALUE "CompanyName", "OmniCONTROL\0"
    VALUE "FileDescription", "OmniView — подразделение OmniCONTROL\0"
-   VALUE "FileVersion", "0.5.1\0"
+   VALUE "FileVersion", "0.6.0\0"
    VALUE "InternalName", "OmniView\0"
    VALUE "OriginalFilename", "OmniView.exe\0"
    VALUE "ProductName", "OmniView\0"
-   VALUE "ProductVersion", "0.5.1\0"
+   VALUE "ProductVersion", "0.6.0\0"
    VALUE "LegalCopyright", "OmniCONTROL\0"
   END
  END

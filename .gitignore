@@ -29,3 +29,6 @@ rustc-ice-*.txt
 /scripts/encode-demo.ps1
 /scripts/package-complete.py
 /НАЧАТЬ ЗДЕСЬ.txt
+
+/data/
+/.omniview-update-*/
